@@ -1,0 +1,19 @@
+# 비밀값 (절대 올리지 않음)
+.env
+*.env
+secrets*.py
+
+# 알림 기록 (GitHub Actions에서는 캐시로 따로 보관)
+sent_state.json
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 기타
+*.png
+.vscode/
+.DS_Store
+Thumbs.db

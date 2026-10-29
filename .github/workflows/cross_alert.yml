@@ -1,0 +1,50 @@
+name: cross-alert
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 5분마다 (GitHub 사정에 따라 몇 분 늦을 수 있음)
+  workflow_dispatch:         # Actions 화면에서 직접 실행하는 버튼
+
+# 이전 실행이 안 끝났으면 기다렸다가 실행 (동시에 돌며 중복 알림 나는 것 방지)
+concurrency:
+  group: cross-alert
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 한글 폰트 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      # 이전 실행에서 보낸 알림 기록 불러오기 (같은 봉 중복 알림 방지)
+      - name: 알림 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: sent_state.json
+          key: sent-state-${{ github.run_id }}
+          restore-keys: sent-state-
+
+      - name: 한 번 훑기
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python cross_alert.py
+
+      - name: 알림 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: sent_state.json
+          key: sent-state-${{ github.run_id }}
