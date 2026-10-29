@@ -2,7 +2,8 @@ name: cross-alert
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 5분마다 (GitHub 사정에 따라 몇 분 늦을 수 있음)
+    # 5분마다 (매시 3,8,13...분). 정각(:00)은 GitHub가 붐벼서 실행이 빠지기 쉬워 피함
+    - cron: "3-58/5 * * * *"
   workflow_dispatch:         # Actions 화면에서 직접 실행하는 버튼
     inputs:
       test:
