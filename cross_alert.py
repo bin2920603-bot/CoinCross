@@ -110,6 +110,30 @@ def ema(values, period):
     return out
 
 
+def rsi(values, period):
+    """RSI (와일더 방식). 계산이 안 되는 앞부분은 nan"""
+    out = [float("nan")] * len(values)
+    if len(values) <= period:
+        return out
+    changes = [values[i] - values[i - 1] for i in range(1, len(values))]
+    avg_gain = sum(max(c, 0) for c in changes[:period]) / period
+    avg_loss = sum(max(-c, 0) for c in changes[:period]) / period
+    for i in range(period, len(values)):
+        if i > period:
+            c = changes[i - 1]
+            avg_gain = (avg_gain * (period - 1) + max(c, 0)) / period
+            avg_loss = (avg_loss * (period - 1) + max(-c, 0)) / period
+        out[i] = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+    return out
+
+
+def macd(values, fast=12, slow=26, signal=9):
+    """MACD선, 시그널선, 히스토그램"""
+    line = [a - b for a, b in zip(ema(values, fast), ema(values, slow))]
+    sig = ema(line, signal)
+    return line, sig, [a - b for a, b in zip(line, sig)]
+
+
 def check_signal(candles):
     """'롱진입' / '숏진입' / '롱준비' / '숏준비' / None(관망)"""
     need = max(50, SIDEWAYS_BARS, VOL_AVG_BARS) + 2
@@ -190,8 +214,9 @@ def make_chart(inst_id, candles, signal, info):
     x = list(range(n))
     up_color, down_color = "#26a69a", "#ef5350"
 
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(12, 7), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
+    # 칸 순서: 가격 / RSI / MACD / 거래대금
+    fig, (ax1, ax_rsi, ax_macd, ax2) = plt.subplots(
+        4, 1, figsize=(12, 11), sharex=True, gridspec_kw={"height_ratios": [4, 1.3, 1.3, 1.3]}
     )
 
     # 가격 (캔들)
@@ -202,12 +227,12 @@ def make_chart(inst_id, candles, signal, info):
         body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01
         ax1.bar(i, body_h, bottom=body_low, color=color, width=0.6)
 
-    ax1.plot(x, e7, label="EMA7", color="#ff9800", linewidth=1.5)
-    ax1.plot(x, e20, label="EMA20", color="#2196f3", linewidth=1.5)
-    ax1.plot(x, e50, label="EMA50", color="#9c27b0", linewidth=1.5)
-    # 진입가 / 손절가 / 익절가 선
+    ax1.plot(x, e7, label="EMA7", color="#E91E63", linewidth=1.6)   # 진한 핑크
+    ax1.plot(x, e20, label="EMA20", color="#F9A825", linewidth=1.6)  # 진한 노랑
+    ax1.plot(x, e50, label="EMA50", color="#43A047", linewidth=1.6)  # 초록
+    # 진입가 / 손절가 / 익절가 선 (익절은 EMA50 초록과 헷갈리지 않게 더 짙은 초록 점선)
     if "entry" in info:
-        for key, label, color in [("tp", "익절", "#2e7d32"), ("entry", "진입", "#212121"), ("sl", "손절", "#c62828")]:
+        for key, label, color in [("tp", "익절", "#1B5E20"), ("entry", "진입", "#212121"), ("sl", "손절", "#c62828")]:
             v = info[key]
             ax1.axhline(v, color=color, linestyle="--", linewidth=1.3)
             # 글자는 차트 오른쪽 바깥에 (x는 차트 비율, y는 가격)
@@ -217,6 +242,28 @@ def make_chart(inst_id, candles, signal, info):
     ax1.legend(loc="upper left")
     ax1.grid(alpha=0.3)
     ax1.set_ylabel("가격 (USDT)")
+
+    # RSI (6, 12, 24)
+    closes_all = [c["close"] for c in candles]
+    for period, color in [(6, "#7B1FA2"), (12, "#1976D2"), (24, "#FF6F00")]:
+        ax_rsi.plot(x, rsi(closes_all, period)[-n:], label=f"RSI{period}", color=color, linewidth=1.2)
+    for level in (30, 70):
+        ax_rsi.axhline(level, color="#9e9e9e", linestyle="--", linewidth=0.8)
+    ax_rsi.set_ylim(0, 100)
+    ax_rsi.set_yticks([30, 50, 70])
+    ax_rsi.set_ylabel("RSI")
+    ax_rsi.legend(loc="upper left", fontsize=8, ncol=3)
+    ax_rsi.grid(alpha=0.3)
+
+    # MACD (12, 26, 9)
+    m_line, m_sig, m_hist = (s[-n:] for s in macd(closes_all))
+    ax_macd.bar(x, m_hist, color=[up_color if h >= 0 else down_color for h in m_hist], width=0.6, alpha=0.6)
+    ax_macd.plot(x, m_line, label="MACD", color="#1976D2", linewidth=1.2)
+    ax_macd.plot(x, m_sig, label="Signal", color="#FF6F00", linewidth=1.2)
+    ax_macd.axhline(0, color="#9e9e9e", linewidth=0.8)
+    ax_macd.set_ylabel("MACD")
+    ax_macd.legend(loc="upper left", fontsize=8, ncol=2)
+    ax_macd.grid(alpha=0.3)
 
     # 거래대금 막대
     vol_colors = [up_color if c["close"] >= c["open"] else down_color for c in cs]
