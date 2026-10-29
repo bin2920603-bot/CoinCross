@@ -34,7 +34,9 @@ SCAN_INTERVAL = 60       # --loop 모드에서 몇 초마다 훑을지
 SIDEWAYS_BARS = 12       # 횡보 판단 봉 수
 SIDEWAYS_PCT = 0.005     # EMA들이 가격의 0.5% 안에 붙어 있어야 횡보
 VOL_AVG_BARS = 20        # 거래대금 평균 봉 수
-VOL_MULT = 2.0           # 평균의 몇 배면 폭발로 볼지
+VOL_MULT = 1.5           # 평균의 몇 배면 폭발로 볼지
+MAX_DIST_PCT = 0.007     # 현재 가격이 EMA20에서 0.7% 넘게 벗어나 있으면 제외 (이미 많이 달린 경우)
+READY_ENABLED = False    # 준비 알림 켜기/끄기 (True로 바꾸면 다시 켜짐)
 READY_PCT = 0.0015       # EMA7이 EMA20에 가격의 0.15% 이내로 다가오면 준비 알림
 CHART_BARS = 80          # 차트에 보여줄 봉 개수
 KST = timezone(timedelta(hours=9))
@@ -121,7 +123,11 @@ def check_signal(candles):
         if spread / closes[i] > SIDEWAYS_PCT:
             return None, None
 
-    # (3) 거래대금 폭발: 현재 봉이 직전 20봉 평균의 2배 이상
+    # 가격이 EMA20에서 0.7% 넘게 벗어나 있으면 제외
+    if abs(closes[-1] - e20[-1]) / e20[-1] > MAX_DIST_PCT:
+        return None, None
+
+    # (3) 거래대금 폭발: 현재 봉이 직전 20봉 평균의 1.5배 이상
     avg_vol = sum(vols[-VOL_AVG_BARS - 1:-1]) / VOL_AVG_BARS
     if avg_vol <= 0 or vols[-1] < avg_vol * VOL_MULT:
         return None, None
@@ -132,7 +138,7 @@ def check_signal(candles):
     elif e7[-2] >= e20[-2] and e7[-1] < e20[-1]:
         signal = "숏진입"
     # 준비: 아직 교차 전인데 EMA7이 EMA20에 0.15% 이내로 다가오는 중 (간격이 줄어드는 방향)
-    elif abs(e7[-1] - e20[-1]) / closes[-1] <= READY_PCT:
+    elif READY_ENABLED and abs(e7[-1] - e20[-1]) / closes[-1] <= READY_PCT:
         if e7[-1] < e20[-1] and e20[-1] - e7[-1] < e20[-2] - e7[-2]:
             signal = "롱준비"
         elif e7[-1] > e20[-1] and e7[-1] - e20[-1] < e7[-2] - e20[-2]:
