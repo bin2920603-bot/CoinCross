@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"   # 5분마다 (GitHub 사정에 따라 몇 분 늦을 수 있음)
   workflow_dispatch:         # Actions 화면에서 직접 실행하는 버튼
+    inputs:
+      test:
+        description: "[테스트] 차트 사진 보내기 (신호 검사는 안 함)"
+        type: boolean
+        default: false
 
 # 이전 실행이 안 끝났으면 기다렸다가 실행 (동시에 돌며 중복 알림 나는 것 방지)
 concurrency:
@@ -40,7 +45,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python cross_alert.py
+        run: python cross_alert.py ${{ inputs.test && '--test' || '' }}
 
       - name: 알림 기록 저장
         if: always()

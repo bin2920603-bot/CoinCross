@@ -2,8 +2,9 @@
 """
 OKX 선물(USDT-SWAP) EMA 교차 알림
 - 거래대금 상위 100개 코인을 한 번 훑고 끝남 (GitHub Actions가 5분마다 실행)
-- 15분봉 기준: 횡보 뒤 EMA7/EMA20 교차 + 거래대금 폭발이면 텔레그램으로 차트 전송
+- 15분봉 기준: 횡보 뒤 EMA7/EMA50 교차 + 거래대금 폭발이면 텔레그램으로 차트 전송
 - 내 PC에서 계속 돌리려면: python cross_alert.py --loop  (60초마다 반복)
+- 차트/전송 확인용 [테스트] 사진 보내기: python cross_alert.py --test
 """
 
 import io
@@ -38,7 +39,7 @@ VOL_AVG_BARS = 20        # 거래대금 평균 봉 수
 VOL_MULT = 1.5           # 평균의 몇 배면 폭발로 볼지
 MAX_DIST_PCT = 0.007     # 현재 가격이 EMA20에서 0.7% 넘게 벗어나 있으면 제외 (이미 많이 달린 경우)
 READY_ENABLED = False    # 준비 알림 켜기/끄기 (True로 바꾸면 다시 켜짐)
-READY_PCT = 0.0015       # EMA7이 EMA20에 가격의 0.15% 이내로 다가오면 준비 알림
+READY_PCT = 0.0015       # EMA7이 EMA50에 가격의 0.15% 이내로 다가오면 준비 알림
 TP_RR = 1.5              # 익절거리 = 손절거리의 1.5배
 MAX_RISK_PCT = 0.02      # 손절거리가 진입가의 2%를 넘으면 '패스'로 표시
 CHART_BARS = 80          # 차트에 보여줄 봉 개수
@@ -159,16 +160,16 @@ def check_signal(candles):
     if avg_vol <= 0 or vols[-1] < avg_vol * VOL_MULT:
         return None, None
 
-    # (2) 교차: 직전 봉 대비 현재 봉에서 EMA7이 EMA20을 뚫음
-    if e7[-2] <= e20[-2] and e7[-1] > e20[-1]:
+    # (2) 교차: 직전 봉 대비 현재 봉에서 EMA7이 EMA50을 뚫음 (위로 = 롱진입, 아래로 = 숏진입, 그 외 = 관망)
+    if e7[-2] <= e50[-2] and e7[-1] > e50[-1]:
         signal = "롱진입"
-    elif e7[-2] >= e20[-2] and e7[-1] < e20[-1]:
+    elif e7[-2] >= e50[-2] and e7[-1] < e50[-1]:
         signal = "숏진입"
-    # 준비: 아직 교차 전인데 EMA7이 EMA20에 0.15% 이내로 다가오는 중 (간격이 줄어드는 방향)
-    elif READY_ENABLED and abs(e7[-1] - e20[-1]) / closes[-1] <= READY_PCT:
-        if e7[-1] < e20[-1] and e20[-1] - e7[-1] < e20[-2] - e7[-2]:
+    # 준비: 아직 교차 전인데 EMA7이 EMA50에 0.15% 이내로 다가오는 중 (간격이 줄어드는 방향)
+    elif READY_ENABLED and abs(e7[-1] - e50[-1]) / closes[-1] <= READY_PCT:
+        if e7[-1] < e50[-1] and e50[-1] - e7[-1] < e50[-2] - e7[-2]:
             signal = "롱준비"
-        elif e7[-1] > e20[-1] and e7[-1] - e20[-1] < e7[-2] - e20[-2]:
+        elif e7[-1] > e50[-1] and e7[-1] - e50[-1] < e7[-2] - e50[-2]:
             signal = "숏준비"
         else:
             return None, None
@@ -177,25 +178,29 @@ def check_signal(candles):
 
     info = {"e7": e7, "e20": e20, "e50": e50, "vol_ratio": vols[-1] / avg_vol}
 
-    # 진입가 = 신호봉 종가, 손절가 = 횡보 구간(직전 12봉) 저점/고점, 익절가 = 손절거리 1.5배
     if signal.endswith("진입"):
-        box = candles[-SIDEWAYS_BARS - 1:-1]
-        entry = closes[-1]
-        if signal == "롱진입":
-            sl = min(c["low"] for c in box)
-            risk = entry - sl
-            tp = entry + risk * TP_RR
-        else:
-            sl = max(c["high"] for c in box)
-            risk = sl - entry
-            tp = entry - risk * TP_RR
-        risk_pct = risk / entry
-        info.update({
-            "entry": entry, "sl": sl, "tp": tp, "risk_pct": risk_pct,
-            # 손절가가 진입가 반대편에 있거나(risk<=0) 손절거리가 2% 넘으면 패스
-            "pass": risk <= 0 or risk_pct > MAX_RISK_PCT,
-        })
+        info.update(trade_levels(candles, signal))
     return signal, info
+
+
+def trade_levels(candles, signal):
+    """진입가 = 신호봉 종가, 손절가 = 횡보 구간(직전 12봉) 저점/고점, 익절가 = 손절거리 1.5배"""
+    box = candles[-SIDEWAYS_BARS - 1:-1]
+    entry = candles[-1]["close"]
+    if signal == "롱진입":
+        sl = min(c["low"] for c in box)
+        risk = entry - sl
+        tp = entry + risk * TP_RR
+    else:
+        sl = max(c["high"] for c in box)
+        risk = sl - entry
+        tp = entry - risk * TP_RR
+    risk_pct = risk / entry
+    return {
+        "entry": entry, "sl": sl, "tp": tp, "risk_pct": risk_pct,
+        # 손절가가 진입가 반대편에 있거나(risk<=0) 손절거리가 2% 넘으면 패스
+        "pass": risk <= 0 or risk_pct > MAX_RISK_PCT,
+    }
 
 
 def fmt_price(v, ref=None):
@@ -390,10 +395,29 @@ def scan(sent):
     print(f"{datetime.now(KST):%H:%M:%S} 스캔 완료: {len(symbols)}개 확인, 신호 {hits}개")
 
 
+def send_test(inst_id="BTC-USDT-SWAP"):
+    """조건과 상관없이 현재 차트를 [테스트] 사진으로 보냄 (차트/전송 확인용)"""
+    candles = get_candles(inst_id)
+    closes = [c["close"] for c in candles]
+    vols = [c["quote_vol"] for c in candles]
+    e7, e20, e50 = ema(closes, 7), ema(closes, 20), ema(closes, 50)
+    signal = "롱진입" if e7[-1] >= e50[-1] else "숏진입"  # 지금 EMA7이 EMA50 위면 롱, 아래면 숏 모양으로
+    avg_vol = sum(vols[-VOL_AVG_BARS - 1:-1]) / VOL_AVG_BARS
+    info = {"e7": e7, "e20": e20, "e50": e50, "vol_ratio": vols[-1] / avg_vol if avg_vol else 0}
+    info.update(trade_levels(candles, signal))
+    caption = "[테스트] 실제 신호가 아닙니다\n" + make_caption(inst_id, candles[-1], signal, info)
+    print(caption)
+    send_telegram(make_chart(inst_id, candles, signal, info), caption)
+
+
 def main():
     setup_korean_font()
     if not TOKEN or not CHAT_ID:
         print("[알림] 환경변수 TELEGRAM_TOKEN, TELEGRAM_CHAT_ID가 없어 텔레그램 전송 없이 화면에만 표시합니다.")
+
+    if "--test" in sys.argv:
+        send_test()
+        return
 
     sent = load_state()
     if "--loop" not in sys.argv:
