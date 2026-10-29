@@ -8,6 +8,7 @@ OKX 선물(USDT-SWAP) EMA 교차 알림
 
 import io
 import json
+import math
 import os
 import sys
 import time
@@ -38,6 +39,8 @@ VOL_MULT = 1.5           # 평균의 몇 배면 폭발로 볼지
 MAX_DIST_PCT = 0.007     # 현재 가격이 EMA20에서 0.7% 넘게 벗어나 있으면 제외 (이미 많이 달린 경우)
 READY_ENABLED = False    # 준비 알림 켜기/끄기 (True로 바꾸면 다시 켜짐)
 READY_PCT = 0.0015       # EMA7이 EMA20에 가격의 0.15% 이내로 다가오면 준비 알림
+TP_RR = 1.5              # 익절거리 = 손절거리의 1.5배
+MAX_RISK_PCT = 0.02      # 손절거리가 진입가의 2%를 넘으면 '패스'로 표시
 CHART_BARS = 80          # 차트에 보여줄 봉 개수
 KST = timezone(timedelta(hours=9))
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sent_state.json")
@@ -149,7 +152,34 @@ def check_signal(candles):
         return None, None
 
     info = {"e7": e7, "e20": e20, "e50": e50, "vol_ratio": vols[-1] / avg_vol}
+
+    # 진입가 = 신호봉 종가, 손절가 = 횡보 구간(직전 12봉) 저점/고점, 익절가 = 손절거리 1.5배
+    if signal.endswith("진입"):
+        box = candles[-SIDEWAYS_BARS - 1:-1]
+        entry = closes[-1]
+        if signal == "롱진입":
+            sl = min(c["low"] for c in box)
+            risk = entry - sl
+            tp = entry + risk * TP_RR
+        else:
+            sl = max(c["high"] for c in box)
+            risk = sl - entry
+            tp = entry - risk * TP_RR
+        risk_pct = risk / entry
+        info.update({
+            "entry": entry, "sl": sl, "tp": tp, "risk_pct": risk_pct,
+            # 손절가가 진입가 반대편에 있거나(risk<=0) 손절거리가 2% 넘으면 패스
+            "pass": risk <= 0 or risk_pct > MAX_RISK_PCT,
+        })
     return signal, info
+
+
+def fmt_price(v, ref=None):
+    """가격 크기(ref 기준, 없으면 v)에 맞춰 소수점 자리수 조절 → 같은 코인은 자리수 통일"""
+    ref = ref or v
+    if ref <= 0:
+        return f"{v}"
+    return f"{v:,.{max(2, 4 - math.floor(math.log10(ref)))}f}"
 
 
 # ----- 차트 -----
@@ -175,6 +205,15 @@ def make_chart(inst_id, candles, signal, info):
     ax1.plot(x, e7, label="EMA7", color="#ff9800", linewidth=1.5)
     ax1.plot(x, e20, label="EMA20", color="#2196f3", linewidth=1.5)
     ax1.plot(x, e50, label="EMA50", color="#9c27b0", linewidth=1.5)
+    # 진입가 / 손절가 / 익절가 선
+    if "entry" in info:
+        for key, label, color in [("tp", "익절", "#2e7d32"), ("entry", "진입", "#212121"), ("sl", "손절", "#c62828")]:
+            v = info[key]
+            ax1.axhline(v, color=color, linestyle="--", linewidth=1.3)
+            # 글자는 차트 오른쪽 바깥에 (x는 차트 비율, y는 가격)
+            ax1.text(1.005, v, f"{label} {fmt_price(v, info['entry'])}", color=color, va="center", ha="left",
+                     fontsize=10, fontweight="bold", transform=ax1.get_yaxis_transform(), clip_on=False)
+
     ax1.legend(loc="upper left")
     ax1.grid(alpha=0.3)
     ax1.set_ylabel("가격 (USDT)")
@@ -200,11 +239,13 @@ def make_chart(inst_id, candles, signal, info):
         # 준비 알림은 노란색 (흰 배경에서도 잘 보이게 검은 테두리)
         title = fig.suptitle(f"{coin}  {signal}", fontsize=28, fontweight="bold", color="#FFD600")
         title.set_path_effects([patheffects.withStroke(linewidth=3, foreground="black")])
+    elif info.get("pass"):
+        fig.suptitle(f"{coin}  {signal}  (패스)", fontsize=28, fontweight="bold", color="#757575")
     else:
         title_color = up_color if signal == "롱진입" else down_color
         fig.suptitle(f"{coin}  {signal}", fontsize=28, fontweight="bold", color=title_color)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 0.92, 0.95])  # 오른쪽은 가격선 글자 자리
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100)
     plt.close(fig)
@@ -249,6 +290,31 @@ def save_state(sent):
         json.dump(pruned, f, ensure_ascii=False, indent=1)
 
 
+# ----- 텔레그램 글 -----
+def make_caption(inst_id, last, signal, info):
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    # 텔레그램 캡션은 글자색을 못 바꿔서 노란 동그라미로 표시
+    head = f"🟡🟡 {signal} 🟡🟡" if signal.endswith("준비") else signal
+    lines = [head, inst_id]
+    if "entry" in info:
+        entry, sl, tp = info["entry"], info["sl"], info["tp"]
+        if info["pass"]:
+            lines[0] = f"⛔ 패스 · {signal}"
+        lines += [
+            f"진입가: {fmt_price(entry)}",
+            f"손절가: {fmt_price(sl, entry)} ({(sl - entry) / entry * 100:+.2f}%)",
+            f"익절가: {fmt_price(tp, entry)} ({(tp - entry) / entry * 100:+.2f}%)",
+        ]
+        if info["pass"]:
+            reason = ("손절가가 진입가 반대편" if info["risk_pct"] <= 0
+                      else f"손절거리 {info['risk_pct'] * 100:.2f}% > {MAX_RISK_PCT * 100:.0f}%")
+            lines.append(f"→ 패스 ({reason})")
+    else:
+        lines.append(f"가격: {fmt_price(last['close'])}")
+    lines += [f"거래대금: 평균의 {info['vol_ratio']:.1f}배", f"{now} (15분봉)"]
+    return "\n".join(lines)
+
+
 # ----- 한 번 훑기 -----
 def scan(sent):
     try:
@@ -265,16 +331,7 @@ def scan(sent):
             kind = signal[-2:] if signal else None  # "진입" 또는 "준비"
             if signal and sent[kind].get(inst_id) != candles[-1]["ts"]:
                 last = candles[-1]
-                now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-                # 텔레그램 캡션은 글자색을 못 바꿔서 노란 동그라미로 표시
-                head = f"🟡🟡 {signal} 🟡🟡" if kind == "준비" else signal
-                caption = (
-                    f"{head}\n"
-                    f"{inst_id}\n"
-                    f"가격: {last['close']}\n"
-                    f"거래대금: 평균의 {info['vol_ratio']:.1f}배\n"
-                    f"{now} (15분봉)"
-                )
+                caption = make_caption(inst_id, last, signal, info)
                 print(f"[신호] {caption.replace(chr(10), ' | ')}")
                 send_telegram(make_chart(inst_id, candles, signal, info), caption)
                 sent[kind][inst_id] = last["ts"]
