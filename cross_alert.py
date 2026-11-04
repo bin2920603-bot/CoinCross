@@ -3,7 +3,7 @@
 OKX 선물(USDT-SWAP) EMA 교차 알림
 - 거래대금 상위 100개 코인을 한 번 훑고 끝남 (GitHub Actions가 5분마다 실행)
 - 15분봉 기준: 횡보 뒤 EMA7/EMA50 교차 + 거래대금 폭발이면 텔레그램으로 차트 전송
-- 차트는 일봉·4시간봉·1시간봉·15분봉 4개를 사진 한 장에 같이 보냄
+- 차트는 일봉·4시간봉·1시간봉·15분봉 4개를 사진 한 장에 같이 보냄 (노란 추세선 포함)
 - 내 PC에서 계속 돌리려면: python cross_alert.py --loop  (60초마다 반복)
 - 차트/전송 확인용 [테스트] 사진 보내기: python cross_alert.py --test
 """
@@ -44,6 +44,9 @@ READY_PCT = 0.0015       # EMA7이 EMA50에 가격의 0.15% 이내로 다가오�
 TP_RR = 1.5              # 익절거리 = 손절거리의 1.5배
 MAX_RISK_PCT = 0.02      # 손절거리가 진입가의 2%를 넘으면 '패스'로 표시
 CHART_BARS = 80          # 차트에 보여줄 봉 개수
+TREND_K = 3              # 추세선 고점/저점 판단: 좌우 몇 봉보다 높아야(낮아야) 고점(저점)으로 볼지
+TREND_TOL = 0.003        # 추세선을 가격이 이 비율(0.3%)까지는 넘어도 괜찮다고 봄
+TREND_COLOR = "#FFC107"  # 추세선 색 (노란색)
 # 차트 4개 (왼쪽 위 → 오른쪽 아래 순서). 마지막 15분봉이 신호 기준이라 진입·손절·익절 선이 여기에만 그려짐
 CHART_FRAMES = [
     ("일봉", "1D", "%m-%d"),
@@ -230,6 +233,64 @@ def fmt_vol(v, _=None):
     return f"{v:,.0f}"
 
 
+# ----- 추세선 -----
+def find_swings(values, k, high=True):
+    """좌우 k봉보다 높은(낮은) 봉의 위치 목록 = 고점(저점)"""
+    out = []
+    for i in range(k, len(values) - k):
+        window = values[i - k:i + k + 1]
+        if (high and values[i] == max(window)) or ((not high) and values[i] == min(window)):
+            out.append(i)
+    return out
+
+
+def find_trendline(cs, kind):
+    """kind='down': 고점들을 이은 하락 추세선, kind='up': 저점들을 이은 상승 추세선.
+    선이 지나온 구간에서 가격이 선을 뚫지 않은 것만 인정. 못 찾으면 None.
+    돌려주는 값: (시작 위치, 시작 가격, 끝 위치, 끝 가격)"""
+    n = len(cs)
+    if kind == "down":
+        vals = [c["high"] for c in cs]
+        swings = find_swings(vals, TREND_K, True)
+    else:
+        vals = [c["low"] for c in cs]
+        swings = find_swings(vals, TREND_K, False)
+
+    for b in reversed(swings[-3:]):      # 최근 고점(저점) 3개 중에서 뒤쪽 점 고르기
+        for a in swings:                 # 앞쪽 점은 오래된 것부터 (선이 길수록 좋음)
+            if b - a < 5:
+                break
+            if kind == "down" and vals[a] <= vals[b]:
+                continue
+            if kind == "up" and vals[a] >= vals[b]:
+                continue
+            slope = (vals[b] - vals[a]) / (b - a)
+            ok = True
+            for x in range(a, n - 1):    # 마지막(진행 중) 봉은 제외하고 선을 뚫었는지 확인
+                line = vals[a] + slope * (x - a)
+                if kind == "down" and vals[x] > line * (1 + TREND_TOL):
+                    ok = False
+                    break
+                if kind == "up" and vals[x] < line * (1 - TREND_TOL):
+                    ok = False
+                    break
+            if ok:
+                return a, vals[a], n - 1, vals[a] + slope * (n - 1 - a)
+    return None
+
+
+def draw_trendlines(ax, cs):
+    """가격 차트에 노란 추세선(하락선·상승선)을 그림"""
+    first = True
+    for kind in ("down", "up"):
+        t = find_trendline(cs, kind)
+        if t:
+            x0, y0, x1, y1 = t
+            ax.plot([x0, x1], [y0, y1], color=TREND_COLOR, linewidth=2.4,
+                    label="추세선" if first else None)
+            first = False
+
+
 # ----- 차트 -----
 def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     """차트 1개(가격+EMA / RSI / MACD / 거래대금 4칸)를 spec 자리에 그림.
@@ -271,6 +332,11 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
             # 글자는 차트 오른쪽 바깥에 (x는 차트 비율, y는 가격)
             ax1.text(1.005, v, f"{name} {fmt_price(v, info['entry'])}", color=color, va="center", ha="left",
                      fontsize=10, fontweight="bold", transform=ax1.get_yaxis_transform(), clip_on=False)
+
+    # 노란 추세선 (선이 멀리 뻗어도 차트 가격 범위는 그대로 유지)
+    y_lo, y_hi = ax1.get_ylim()
+    draw_trendlines(ax1, cs)
+    ax1.set_ylim(y_lo, y_hi)
 
     ax1.set_title(label, fontsize=18, fontweight="bold", loc="left")
     ax1.legend(loc="upper left", fontsize=8)
