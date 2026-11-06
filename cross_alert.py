@@ -43,9 +43,12 @@ READY_ENABLED = False    # 준비 알림 켜기/끄기 (True로 바꾸면 다시
 READY_PCT = 0.0015       # EMA7이 EMA50에 가격의 0.15% 이내로 다가오면 준비 알림
 TP_RR = 1.5              # 익절거리 = 손절거리의 1.5배
 MAX_RISK_PCT = 0.02      # 손절거리가 진입가의 2%를 넘으면 '패스'로 표시
-CHART_BARS = 80          # 차트에 보여줄 봉 개수
-TREND_K = 3              # 추세선 고점/저점 판단: 좌우 몇 봉보다 높아야(낮아야) 고점(저점)으로 볼지
-TREND_TOL = 0.003        # 추세선을 가격이 이 비율(0.3%)까지는 넘어도 괜찮다고 봄
+CHART_BARS = 120         # 차트에 보여줄 봉 개수
+TREND_EXT = 20           # 추세선을 오른쪽으로 몇 봉 더 늘려 그릴지
+TREND_K = 2              # 추세선 고점/저점 판단: 좌우 몇 봉보다 높아야(낮아야) 고점(저점)으로 볼지
+TREND_TOL = 0.03         # 꼬리가 선을 넘어도 봐주는 여유 (차트 높이의 3%)
+TREND_BAD = 1            # 선을 넘은 봉이 이 개수 이하면 인정
+TREND_MIN_GAP = 8        # 선을 긋는 두 점 사이 최소 봉 수
 TREND_COLOR = "#FFC107"  # 추세선 색 (노란색)
 # 차트 4개 (왼쪽 위 → 오른쪽 아래 순서). 마지막 15분봉이 신호 기준이라 진입·손절·익절 선이 여기에만 그려짐
 CHART_FRAMES = [
@@ -246,47 +249,54 @@ def find_swings(values, k, high=True):
 
 def find_trendline(cs, kind):
     """kind='down': 고점들을 이은 하락 추세선, kind='up': 저점들을 이은 상승 추세선.
-    선이 지나온 구간에서 가격이 선을 뚫지 않은 것만 인정. 못 찾으면 None.
+    꼬리가 선을 살짝 넘는 건 봐주고, 넘은 봉이 TREND_BAD개 이하인 선 중 가장 길게 이어진 선을 고름.
     돌려주는 값: (시작 위치, 시작 가격, 끝 위치, 끝 가격)"""
     n = len(cs)
+    highs = [c["high"] for c in cs]
+    lows = [c["low"] for c in cs]
+    tol = TREND_TOL * (max(highs) - min(lows))
     if kind == "down":
-        vals = [c["high"] for c in cs]
+        vals = highs
         swings = find_swings(vals, TREND_K, True)
     else:
-        vals = [c["low"] for c in cs]
+        vals = lows
         swings = find_swings(vals, TREND_K, False)
-
-    for b in reversed(swings[-3:]):      # 최근 고점(저점) 3개 중에서 뒤쪽 점 고르기
-        for a in swings:                 # 앞쪽 점은 오래된 것부터 (선이 길수록 좋음)
-            if b - a < 5:
+    best = None
+    for b in swings[-4:]:
+        for a in swings:
+            if b - a < TREND_MIN_GAP:
                 break
             if kind == "down" and vals[a] <= vals[b]:
                 continue
             if kind == "up" and vals[a] >= vals[b]:
                 continue
             slope = (vals[b] - vals[a]) / (b - a)
-            ok = True
-            for x in range(a, n - 1):    # 마지막(진행 중) 봉은 제외하고 선을 뚫었는지 확인
+            bad = 0
+            for x in range(a, n - 1):    # 마지막(진행 중) 봉은 제외
                 line = vals[a] + slope * (x - a)
-                if kind == "down" and vals[x] > line * (1 + TREND_TOL):
-                    ok = False
-                    break
-                if kind == "up" and vals[x] < line * (1 - TREND_TOL):
-                    ok = False
-                    break
-            if ok:
-                return a, vals[a], n - 1, vals[a] + slope * (n - 1 - a)
-    return None
+                if kind == "down" and vals[x] > line + tol:
+                    bad += 1
+                if kind == "up" and vals[x] < line - tol:
+                    bad += 1
+            if bad > TREND_BAD:
+                continue
+            span = b - a
+            if best is None or span > best[0]:
+                best = (span, a, vals[a], n - 1, vals[a] + slope * (n - 1 - a))
+    return best[1:] if best else None
 
 
 def draw_trendlines(ax, cs):
-    """가격 차트에 노란 추세선(하락선·상승선)을 그림"""
+    """가격 차트에 노란 추세선(하락선·상승선)을 그림. 선은 오른쪽으로 TREND_EXT봉 더 늘려 그림"""
     first = True
+    n = len(cs)
     for kind in ("down", "up"):
         t = find_trendline(cs, kind)
         if t:
             x0, y0, x1, y1 = t
-            ax.plot([x0, x1], [y0, y1], color=TREND_COLOR, linewidth=2.4,
+            slope = (y1 - y0) / (x1 - x0) if x1 != x0 else 0
+            x_end = n - 1 + TREND_EXT
+            ax.plot([x0, x_end], [y0, y0 + slope * (x_end - x0)], color=TREND_COLOR, linewidth=3.0,
                     label="추세선" if first else None)
             first = False
 
@@ -337,6 +347,7 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     y_lo, y_hi = ax1.get_ylim()
     draw_trendlines(ax1, cs)
     ax1.set_ylim(y_lo, y_hi)
+    ax1.set_xlim(-1, n + TREND_EXT)
 
     ax1.set_title(label, fontsize=18, fontweight="bold", loc="left")
     ax1.legend(loc="upper left", fontsize=8)
