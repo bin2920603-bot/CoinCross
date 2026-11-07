@@ -40,6 +40,7 @@ VOL_AVG_BARS = 20        # 거래대금 평균 봉 수
 VOL_MULT = 1.5           # 평균의 몇 배면 폭발로 볼지
 MAX_DIST_PCT = 0.007     # 현재 가격이 EMA20에서 0.7% 넘게 벗어나 있으면 제외 (이미 많이 달린 경우)
 READY_ENABLED = False    # 준비 알림 켜기/끄기 (True로 바꾸면 다시 켜짐)
+SKIP_SAME_FLOW = True     # 일봉·4시간봉 큰 흐름이 알림 방향과 둘 다 같으면 알림 안 보냄 (승률 35%로 낮았음. False면 다시 보냄)
 READY_PCT = 0.0015       # EMA7이 EMA50에 가격의 0.15% 이내로 다가오면 준비 알림
 TP_RR = 1.5              # 익절거리 = 손절거리의 1.5배
 MAX_RISK_PCT = 0.02      # 손절거리가 진입가의 2%를 넘으면 '패스'로 표시
@@ -428,6 +429,27 @@ def make_chart(inst_id, candles, signal, info):
 
 
 # ----- 텔레그램 -----
+def same_flow(inst_id, signal):
+    """일봉·4시간봉 큰 흐름이 둘 다 신호 방향과 같으면 True (끝난 봉 기준, 승률표와 같은 기준)
+    큰 흐름: 종가>EMA50 이고 EMA20>EMA50 이면 위(up), 반대면 아래(down)"""
+    want = "up" if signal.startswith("롱") else "down"
+    for bar in ("1D", "4H"):
+        cs = get_candles(inst_id, bar)[:-1]      # 맨 끝(아직 안 끝난 봉)은 뺌
+        if len(cs) < 60:
+            return False
+        closes = [c["close"] for c in cs]
+        e20, e50 = ema(closes, 20)[-1], ema(closes, 50)[-1]
+        if closes[-1] > e50 and e20 > e50:
+            trend = "up"
+        elif closes[-1] < e50 and e20 < e50:
+            trend = "down"
+        else:
+            trend = None
+        if trend != want:
+            return False
+    return True
+
+
 def send_telegram(photo, caption):
     if not TOKEN or not CHAT_ID:
         print("  (TOKEN/CHAT_ID가 비어 있어 텔레그램 전송은 건너뜀)")
@@ -505,6 +527,16 @@ def scan(sent):
             kind = signal[-2:] if signal else None  # "진입" 또는 "준비"
             if signal and sent[kind].get(inst_id) != candles[-1]["ts"]:
                 last = candles[-1]
+                if SKIP_SAME_FLOW and kind == "진입" and not info.get("pass"):
+                    try:
+                        skip = same_flow(inst_id, signal)
+                    except Exception as e:
+                        print(f"[오류] {inst_id} 큰 흐름 확인 실패(알림은 그대로 보냄): {e}")
+                        skip = False
+                    if skip:
+                        print(f"[건너뜀] {inst_id} {signal}: 일봉·4시간봉 큰 흐름이 같은 방향")
+                        sent[kind][inst_id] = last["ts"]
+                        continue
                 caption = make_caption(inst_id, last, signal, info)
                 print(f"[신호] {caption.replace(chr(10), ' | ')}")
                 send_telegram(make_chart(inst_id, candles, signal, info), caption)
