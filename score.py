@@ -22,11 +22,11 @@ WINDOW = ca.CANDLE_LIMIT                         # 실제 알림이 보는 봉 �
 BE = 40                                          # 손익분기 승률(%) (익절=손절x1.5)
 
 
-def get_history(inst_id, bars):
-    """15분봉을 오래된 것 -> 최신 순으로, 확정된 봉만 bars개 가까이 가져옴"""
+def get_history(inst_id, bars, bar=ca.BAR):
+    """봉을 오래된 것 -> 최신 순으로, 확정된 봉만 bars개 가까이 가져옴"""
     out, after = [], None
     while len(out) < bars:
-        p = {"instId": inst_id, "bar": ca.BAR, "limit": 100}
+        p = {"instId": inst_id, "bar": bar, "limit": 100}
         if after:
             p["after"] = after
         r = ca.session.get(ca.OKX + "/api/v5/market/history-candles", params=p, timeout=15)
@@ -45,6 +45,38 @@ def get_history(inst_id, bars):
     return out
 
 
+PERIOD = {"4H": 4 * 3600000, "1D": 24 * 3600000}
+
+
+def trend_series(candles):
+    """봉마다 큰 흐름: 종가>EMA50 이고 EMA20>EMA50 이면 up, 반대면 down, 아니면 None (근접알림과 같은 기준)"""
+    closes = [c["close"] for c in candles]
+    e20, e50 = ca.ema(closes, 20), ca.ema(closes, 50)
+    out = []
+    for i, c in enumerate(closes):
+        if i < 59:
+            out.append(None)
+        elif c > e50[i] and e20[i] > e50[i]:
+            out.append("up")
+        elif c < e50[i] and e20[i] < e50[i]:
+            out.append("down")
+        else:
+            out.append(None)
+    return out
+
+
+def trend_at(candles, trends, period, t_ms):
+    """t_ms 시각에 이미 끝나 있던 가장 최근 봉의 큰 흐름"""
+    lo, hi, ans = 0, len(candles) - 1, -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if candles[mid]["ts"] + period <= t_ms:
+            ans, lo = mid, mid + 1
+        else:
+            hi = mid - 1
+    return trends[ans] if ans >= 0 else None
+
+
 def judge(side, sl, tp, later):
     for c in later[:MAX_WAIT]:
         if side == "롱":
@@ -58,7 +90,7 @@ def judge(side, sl, tp, later):
     return None
 
 
-def backtest(inst_id, candles, since_ms):
+def backtest(inst_id, candles, since_ms, d1, d1t, h4, h4t):
     rows = []
     for i in range(WINDOW - 1, len(candles) - 1):
         if candles[i]["ts"] < since_ms:
@@ -68,9 +100,14 @@ def backtest(inst_id, candles, since_ms):
             continue
         side = "롱" if signal.startswith("롱") else "숏"
         res = judge(side, info["sl"], info["tp"], candles[i + 1:])
+        t_ms = candles[i]["ts"] + 900000            # 신호 봉이 끝난 시각
+        want = "up" if side == "롱" else "down"
+        a = trend_at(d1, d1t, PERIOD["1D"], t_ms) == want
+        b = trend_at(h4, h4t, PERIOD["4H"], t_ms) == want
+        flow = "큰 흐름 둘 다 같은 방향" if (a and b) else ("큰 흐름 하나만 같음" if (a or b) else "큰 흐름 반대·애매")
         if res:
             rows.append({"side": side, "res": res, "vol": info["vol_ratio"],
-                         "risk": info["risk_pct"] * 100, "inst": inst_id, "ts": candles[i]["ts"]})
+                         "risk": info["risk_pct"] * 100, "flow": flow, "inst": inst_id, "ts": candles[i]["ts"]})
     return rows
 
 
@@ -98,8 +135,9 @@ def make_report(rows):
         ("롱·숏별 승률", bucket(rows, lambda r: r["side"] + "진입", ["롱진입", "숏진입"])),
         ("거래대금 폭발 크기별", bucket(rows, vol_name, ["거래대금 1.5~2배", "거래대금 2~3배", "거래대금 3배+"])),
         ("손절폭별", bucket(rows, risk_name, ["손절폭 ~0.5%", "손절폭 0.5~1%", "손절폭 1~2%"])),
+        ("일봉·4시간봉 큰 흐름별", bucket(rows, lambda r: r["flow"], ["큰 흐름 둘 다 같은 방향", "큰 흐름 하나만 같음", "큰 흐름 반대·애매"])),
     ]
-    fig, axes = plt.subplots(3, 1, figsize=(8, 7.5))
+    fig, axes = plt.subplots(4, 1, figsize=(8, 9.5))
     for ax, (title, data) in zip(axes, panels):
         ax.set_title(title, fontsize=11, loc="left")
         ax.set_xlim(0, 100)
@@ -127,7 +165,9 @@ def main():
     rows = []
     for n, inst in enumerate(symbols, 1):
         try:
-            rows += backtest(inst, get_history(inst, bars), since)
+            d1 = get_history(inst, 300, "1D")
+            h4 = get_history(inst, DAYS * 6 + 300, "4H")
+            rows += backtest(inst, get_history(inst, bars), since, d1, trend_series(d1), h4, trend_series(h4))
         except Exception as e:
             print("[오류]", inst, e)
         if n % 20 == 0:
@@ -140,6 +180,10 @@ def main():
         return
     cap = "📊 크로스알림 최근 %d일 (과거 재현) 승률 %.0f%% (익절 %d · 손절 %d) · 점선 40%% 넘으면 이득" % (
         DAYS, w / (w + l) * 100, w, l)
+    g = [r for r in rows if r["flow"] == "큰 흐름 둘 다 같은 방향"]
+    gw = sum(r["res"] == "익절" for r in g)
+    if g:
+        cap += "\n큰 흐름 같은 방향만: 승률 %.0f%% (%d건)" % (gw / len(g) * 100, len(g))
     ca.send_telegram(make_report(rows), cap)
 
 
