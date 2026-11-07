@@ -4,11 +4,15 @@ on:
   schedule:
     - cron: "7 0 * * *"      # 매일 한국시간 오전 9시 7분
   workflow_dispatch:         # Actions 화면에서 직접 실행하는 버튼
+    inputs:
+      days:
+        description: "며칠치를 볼지 (숫자)"
+        default: "14"
 
 jobs:
   score:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -27,4 +31,5 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SCORE_DAYS: ${{ inputs.days || '7' }}
         run: python score.py
