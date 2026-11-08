@@ -24,6 +24,10 @@ TOP_N = 200            # 거래대금 상위 몇 개 코인을 볼지
 RANGE_1H = 0.08        # 최근 1시간 고저폭이 8% 이상이면 큰 변동
 RANGE_15M = 0.04       # 또는 최근 15분 고저폭이 4% 이상이면 급변
 VOL_RATIO = 2.0        # 최근 15분 거래대금이 직전 2시간 평균(15분당)의 몇 배 이상이어야 하는지
+FAST_RANGE = 0.02      # [빠른 감지] 최근 5분 고저폭이 2% 이상이고
+FAST_VOL = 3.0         # [빠른 감지] 최근 5분 거래대금이 직전 2시간 평균(5분당)의 3배 이상이면 바로 알림
+LOOP_SECONDS = 540     # 한 번 켜지면 이 시간(초) 동안 계속 확인 (--loop 일 때)
+SCAN_EVERY = 60        # 몇 초마다 한 바퀴 돌지
 COOLDOWN_MIN = 60      # 같은 코인은 이 시간(분) 안에 다시 알리지 않음
 MAX_PER_SCAN = 6       # 한 번에 보내는 최대 개수 (나머지는 다음 5분에)
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "volt_state.json")
@@ -43,9 +47,15 @@ def measure(candles):
         return None
     prev = sum(c["quote_vol"] for c in candles[-135:-15]) / 8      # 직전 2시간, 15분당 평균
     now15 = sum(c["quote_vol"] for c in last15)
+    last5 = candles[-5:]
+    lo5, hi5 = min(c["low"] for c in last5), max(c["high"] for c in last5)
+    prev5 = sum(c["quote_vol"] for c in candles[-125:-5]) / 24     # 직전 2시간, 5분당 평균
+    now5 = sum(c["quote_vol"] for c in last5)
     return {
         "range_1h": (hi1 - lo1) / lo1, "lo1": lo1, "hi1": hi1,
         "range_15m": (hi15 - lo15) / lo15,
+        "range_5m": (hi5 - lo5) / lo5 if lo5 > 0 else 0,
+        "vol_ratio5": now5 / prev5 if prev5 > 0 else 0,
         "vol_ratio": now15 / prev if prev > 0 else 0,
         "change_1h": (last60[-1]["close"] - last60[0]["open"]) / last60[0]["open"],
         "price": candles[-1]["close"],
@@ -53,7 +63,11 @@ def measure(candles):
 
 
 def is_hot(m):
-    return m is not None and m["vol_ratio"] >= VOL_RATIO and (m["range_1h"] >= RANGE_1H or m["range_15m"] >= RANGE_15M)
+    if m is None:
+        return False
+    slow = m["vol_ratio"] >= VOL_RATIO and (m["range_1h"] >= RANGE_1H or m["range_15m"] >= RANGE_15M)
+    fast = m["range_5m"] >= FAST_RANGE and m["vol_ratio5"] >= FAST_VOL
+    return slow or fast
 
 
 def make_caption(inst, m):
@@ -61,6 +75,7 @@ def make_caption(inst, m):
     return "\n".join([
         f"🔥 변동성 {inst.replace('-USDT-SWAP', '')}",
         f"최근 1시간 고저폭: {m['range_1h'] * 100:.1f}% ({ca.fmt_price(m['lo1'])} ~ {ca.fmt_price(m['hi1'])})",
+        f"최근 5분 고저폭: {m['range_5m'] * 100:.1f}% (거래대금 {m['vol_ratio5']:.1f}배)",
         f"최근 15분 고저폭: {m['range_15m'] * 100:.1f}%",
         f"1시간 변화: {arrow} {m['change_1h'] * 100:+.1f}%",
         f"거래대금: 직전 2시간 평균의 {m['vol_ratio']:.1f}배 (최근 15분)",
@@ -115,7 +130,7 @@ def scan(state):
         except Exception as e:
             print(f"[오류] {inst}: {e}")
         time.sleep(0.1)
-    hot.sort(key=lambda x: -x[0])
+    hot.sort(key=lambda x: -max(x[0], x[2]["range_5m"]))
     sent = 0
     for _, inst, m, c1m in hot[:MAX_PER_SCAN]:
         try:
@@ -168,6 +183,18 @@ def main():
         send_test()
         return
     state = load_state()
+    if "--loop" in sys.argv:
+        end = time.time() + LOOP_SECONDS
+        while True:
+            t0 = time.time()
+            scan(state)
+            save_state(state)
+            wait = SCAN_EVERY - (time.time() - t0)
+            if time.time() + max(wait, 0) >= end:
+                break
+            if wait > 0:
+                time.sleep(wait)
+        return
     scan(state)
     save_state(state)
 
