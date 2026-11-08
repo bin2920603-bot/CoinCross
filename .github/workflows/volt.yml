@@ -1,0 +1,64 @@
+name: volt-alert
+
+on:
+  schedule:
+    - cron: "1-56/5 * * * *"   # 5분마다
+  workflow_dispatch:
+    inputs:
+      find:
+        description: "방 찾기 (처음 한 번만 체크)"
+        type: boolean
+        default: false
+      test:
+        description: "테스트 알림 보내기"
+        type: boolean
+        default: false
+
+concurrency:
+  group: volt
+  cancel-in-progress: false
+
+jobs:
+  volt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 한글 폰트 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 지난 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: volt_state.json
+          key: volt-state-${{ github.run_id }}
+          restore-keys: volt-state-
+
+      - name: 변동성 찾기
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          VOLT_CHAT: ${{ secrets.VOLT_CHAT }}
+        run: |
+          if [ "${{ inputs.find }}" = "true" ]; then
+            python volt.py --find
+          elif [ "${{ inputs.test }}" = "true" ]; then
+            python volt.py --test
+          else
+            python volt.py
+          fi
+
+      - name: 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: volt_state.json
+          key: volt-state-${{ github.run_id }}
