@@ -141,6 +141,11 @@ def find_chat():
     print("봇이 아는 방:", seen)
     for cid, title in seen.items():
         print(f"[찾은 방] {cid} {title}")
+        try:    # 방에도 번호를 직접 말해 줌 (로그가 안 보일 때용)
+            ca.session.post(f"https://api.telegram.org/bot{ca.TOKEN}/sendMessage",
+                            data={"chat_id": cid, "text": f"이 방 번호: {cid}"}, timeout=20)
+        except Exception as e:
+            print("[오류] 방에 번호 보내기 실패:", e)
     if not seen:
         print("[못 찾음] 방에서 /start@봇이름 을 보낸 뒤 24시간 안에 다시 실행하세요")
 
