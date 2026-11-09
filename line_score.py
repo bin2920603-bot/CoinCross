@@ -6,7 +6,7 @@
 - 알림은 방향이 없어서, 각 자리에서 롱/숏을 둘 다 가정하고 익절가·손절가 중 어디에 먼저 닿는지 셈
   가정: 손절 = ATR(14)의 1.5배(진입가의 5% 넘으면 5%), 익절 = 손절거리의 1.5배, 24시간 안에 안 닿으면 '시간초과'(승률에서 뺌)
   같은 봉에서 둘 다 닿으면 손절로 침(보수적으로)
-- 승률 차트 2장을 텔레그램으로 보냄. line_ma.py·cross_alert.py는 하나도 안 바꿈
+- 승률 차트 3장을 텔레그램으로 보냄. line_ma.py·cross_alert.py는 하나도 안 바꿈
 """
 import io
 import os
@@ -184,6 +184,25 @@ def make_charts(rows, days):
     return b1, b2
 
 
+def make_chart3(rows, days):
+    """자리 4가지(선 위/아래 x 선 오르는/내리는) x 롱/숏 승률 (모든 선 합침)"""
+    labels, data = [], []
+    for pos, sl, tag in (("위", "↑", "오르는 선 위"), ("아래", "↑", "오르는 선 아래"),
+                         ("위", "↓", "내리는 선 위"), ("아래", "↓", "내리는 선 아래")):
+        for side in ("롱", "숏"):
+            sub = [r for r in rows if r["pos"] == pos and r["slope"] == sl and r["side"] == side]
+            labels.append(f"{tag} → {side}")
+            data.append(rate(sub))
+    fig, ax = plt.subplots(figsize=(11, 0.55 * len(labels) + 2.2))
+    bar_chart(ax, labels, data, f"자리별 롱/숏 승률 (모든 선 합침 · 최근 {days}일 · 점선 {BE}% 넘으면 이득)")
+    fig.tight_layout()
+    b = io.BytesIO()
+    fig.savefig(b, format="png", dpi=90)
+    plt.close(fig)
+    b.seek(0)
+    return b
+
+
 def main():
     ca.setup_korean_font()
     since = (time.time() - DAYS * 86400) * 1000
@@ -205,6 +224,7 @@ def main():
            f"가정: 손절 ATR×1.5 · 익절 손절×1.5 · 24시간 · 점선 {BE}% 넘으면 이득")
     ca.send_telegram(b1, cap)
     ca.send_telegram(b2, "")
+    ca.send_telegram(make_chart3(rows, DAYS), "")
 
 
 if __name__ == "__main__":
