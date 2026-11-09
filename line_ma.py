@@ -3,6 +3,7 @@
 OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
+- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·현재가
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -70,8 +71,20 @@ def analyze(cs):
     return {"price": price, "lines": res, "series": series}
 
 
+def day_stats(cs):
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
+    H = 3600000
+    day = 24 * H
+    last = cs[-1]["ts"]
+    start = (last + 8 * H) // day * day - 8 * H
+    today = [c for c in cs if c["ts"] >= start]
+    if not today:
+        return None
+    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "price": cs[-1]["close"]}
+
+
 def make_chart(inst, cs, a, name):
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, (ax, axv) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
     n = 130
     v = cs[-n:]
     x = list(range(len(v)))
@@ -80,6 +93,20 @@ def make_chart(inst, cs, a, name):
         ax.vlines(i, c["low"], c["high"], color=col, linewidth=1)
         ax.bar(i, abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01,
                bottom=min(c["open"], c["close"]), color=col, width=0.6)
+        axv.bar(i, c["vol"], color=col, width=0.7, alpha=0.8)
+    # 거래량: 지금 진행 중인 봉은 1시간 속도로 환산해서 점선 막대로 함께 표시
+    done = [c["vol"] for c in cs[-21:-1]]
+    avg = sum(done) / len(done) if done else 0
+    el = (time.time() * 1000 - cs[-1]["ts"]) / 3600000
+    el = min(1.0, max(el, 0.1))
+    pace = cs[-1]["vol"] / el
+    last_i = len(v) - 1
+    if pace > cs[-1]["vol"]:
+        axv.bar(last_i, pace, color="none", edgecolor="#222", linestyle="--", linewidth=1.2, width=0.7)
+    if avg > 0:
+        axv.axhline(avg, color="#555", linewidth=1.2)
+        ratio = pace / avg
+        axv.set_title(f"거래량  20봉 평균(검은선)  ·  지금 봉 속도 평균의 {ratio:.1f}배", fontsize=12, loc="left")
     for ln, color in LINES:
         s = a["series"][ln][-n:]
         pts = [(i, y) for i, y in zip(x, s) if y]
@@ -89,17 +116,24 @@ def make_chart(inst, cs, a, name):
                     linewidth=3.2 if main else 1.2, alpha=1 if main else 0.6, label=ln)
     lv = a["lines"][name]["line"]
     ax.axhspan(lv * (1 - NEAR), lv * (1 + NEAR), color="#e53935", alpha=0.12)
+    ds = day_stats(cs)
+    if ds:
+        for label, val in (("시가", ds["open"]), ("고가", ds["high"])):
+            ax.axhline(val, color="#777", linewidth=1, linestyle=(0, (4, 4)))
+            ax.text(len(v) + 1.5, val, f"{label}", fontsize=9, color="#555", va="bottom", ha="right")
+        ax.text(len(v) + 1.5, ds["price"], "현재가", fontsize=9, color="#000", va="bottom", ha="right", fontweight="bold")
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(alpha=0.3)
+    axv.grid(alpha=0.3)
     step = max(1, len(v) // 8)
-    ax.set_xticks(x[::step])
-    ax.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in v[::step]], fontsize=9)
+    axv.set_xticks(x[::step])
+    axv.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in v[::step]], fontsize=9)
     ax.set_xlim(-1, len(v) + 2)
     g = a["lines"][name]
     side = "위" if g["gap"] >= 0 else "아래"
     fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  1시간봉 {name} 근처 · 선 {side} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.07)
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.93, bottom=0.06, hspace=0.12)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
