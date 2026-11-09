@@ -193,12 +193,11 @@ def make_chart(inst, cs, a, name):
 
 
 def hint(g):
-    """최근 30일 재현 승률표 기준 한 줄 (조건은 안 바꾸고 표시만)"""
-    if g["gap"] < 0 and g["slope"] < 0:
-        return "📉 숏 유리 · 내리는 선 아래 (최근 30일 승률 약 47%)"
-    if g["gap"] >= 0 and g["slope"] > 0:
-        return "⚠️ 롱 주의 · 오르는 선 위 (최근 30일 승률 약 30%)"
-    return ""
+    """최근 30일 재현 승률표 기준 한 줄 (조건은 안 바꾸고 표시만). 숫자는 롱/숏 승률(%)"""
+    up = g["slope"] > 0
+    above = g["gap"] >= 0
+    lo, sh = {(True, True): (30, 49), (False, True): (31, 48), (True, False): (33, 46), (False, False): (31, 47)}[(above, up)]
+    return f"📉 숏 유리 (승률 {sh}%)\n⚠️ 롱 주의 (승률 {lo}%)\n최근 30일 재현 기준 · 손익분기 40%"
 
 
 def load_state():
