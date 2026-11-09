@@ -4,7 +4,7 @@ OKX 선물 1시간봉 EMA960 근처 알림
 - 960개 봉이 필요한 선이라, 코인마다 EMA 값을 기록해 두고 5분마다 새 봉만 이어서 계산함
   (처음 며칠 아닌 처음 몇십 분 동안 코인을 나눠서 기록을 쌓음)
 - 현재가가 EMA960 위아래 0.1% 안이면 차트로 알림. 거름 조건 없음, 같은 코인은 4시간 안에 다시 안 알림
-- 차트: EMA960 + 아래 거래대금(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
+- 차트: 캔들 + EMA960 + 거래대금 + RSI + MACD + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line960.py --find   /   테스트: python line960.py --test
 """
 import io
@@ -117,7 +117,7 @@ def chart_series(entry, recent, n=130):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
     day = 24 * HOUR
     start = (cs[-1]["ts"] + 8 * HOUR) // day * day - 8 * HOUR
     today = [c for c in cs if c["ts"] >= start]
@@ -126,10 +126,35 @@ def day_stats(cs):
     return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
-def add_extras(ax, axv, bars):
-    """거래대금(아래 칸) + 오늘 시가·고가·저가·현재가 + 매일 한국시간 01시 일봉마감선"""
+def draw_osc(axr, axm, r, ml, sg, hs):
+    """아래 두 칸: RSI(14) 와 MACD(12,26,9)"""
+    x = list(range(len(r)))
+    axr.plot(x, r, color="#7b1fa2", linewidth=1.6)
+    axr.axhline(30, color="#26a69a", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(70, color="#ef5350", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(50, color="#90a4ae", linewidth=0.8, alpha=0.6)
+    axr.set_ylim(0, 100)
+    axr.set_yticks([30, 50, 70])
+    axr.set_title(f"RSI(14)  지금 {r[-1]:.0f}  (30 아래 과매도 · 70 위 과매수)", fontsize=12, loc="left")
+    axr.grid(alpha=0.3)
+    axm.bar(x, hs, color=["#26a69a" if h >= 0 else "#ef5350" for h in hs], width=0.7, alpha=0.6)
+    axm.plot(x, ml, color="#1e88e5", linewidth=1.4)
+    axm.plot(x, sg, color="#fb8c00", linewidth=1.4)
+    axm.axhline(0, color="#90a4ae", linewidth=0.8)
+    axm.set_title("MACD(12,26,9)  파랑=MACD선 · 주황=시그널선 · 막대=둘의 차이", fontsize=12, loc="left")
+    axm.grid(alpha=0.3)
+
+
+def add_extras(ax, axv, axr, axm, bars, recent):
+    """거래대금(아래 칸) + 오늘 시가·고가·현재가 + 매일 한국시간 01시 일봉마감선"""
     grey = "#90a4ae"
     x = list(range(len(bars)))
+    rc = [c["close"] for c in recent]
+    r_all = ca.rsi(rc, 14)
+    ml_all, sg_all, hs_all = ca.macd(rc)
+    idx = {c["ts"]: i for i, c in enumerate(recent)}
+    ii = [idx[c["ts"]] for c in bars]
+    draw_osc(axr, axm, [r_all[i] for i in ii], [ml_all[i] for i in ii], [sg_all[i] for i in ii], [hs_all[i] for i in ii])
     for i, c in enumerate(bars):
         col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
         axv.bar(i, c["vol"], color=col, width=0.7, alpha=0.8)
@@ -162,26 +187,26 @@ def add_extras(ax, axv, bars):
     for i, c in enumerate(bars):
         if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
             marks.append(i)
-            for axx in (ax, axv):
+            for axx in (ax, axv, axr, axm):
                 axx.axvline(i - 0.5, color=grey, linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
             ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
                     color="#607d8b", ha="center", va="bottom", fontweight="bold")
     axv.grid(alpha=0.3)
     if len(marks) >= 2:
-        axv.set_xticks([i - 0.5 for i in marks])
-        axv.set_xticklabels([datetime.fromtimestamp(bars[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
+        axm.set_xticks([i - 0.5 for i in marks])
+        axm.set_xticklabels([datetime.fromtimestamp(bars[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
                             fontsize=10, fontweight="bold", color="#607d8b")
     else:
         step = max(1, len(bars) // 8)
-        axv.set_xticks(x[::step])
-        axv.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in bars[::step]], fontsize=9)
+        axm.set_xticks(x[::step])
+        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in bars[::step]], fontsize=9)
 
 
 def make_chart(inst, entry, recent):
     conf, vals, live = chart_series(entry, recent)
     bars = conf + [c for c in recent if c["ts"] > entry[0]][-1:]
     ser = vals + [live]
-    fig, (ax, axv) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
+    fig, (ax, axv, axr, axm) = plt.subplots(4, 1, figsize=(14, 12), sharex=True, gridspec_kw={"height_ratios": [4, 1, 1, 1]})
     x = list(range(len(bars)))
     for i, c in enumerate(bars):
         col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
@@ -193,12 +218,12 @@ def make_chart(inst, entry, recent):
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(alpha=0.3)
     ax.set_xlim(-1, len(bars) + 2)
-    add_extras(ax, axv, bars)
+    add_extras(ax, axv, axr, axm, bars, recent)
     gap = (bars[-1]["close"] - live) / live
     slope = (ser[-1] - ser[-6]) / ser[-6] if len(ser) > 6 and ser[-6] else 0
     fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  1시간봉 EMA960 근처 · 선 {'위' if gap >= 0 else '아래'} {abs(gap) * 100:.2f}% · 선 {'↑' if slope > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
-    fig.subplots_adjust(left=0.07, right=0.86, top=0.93, bottom=0.06, hspace=0.12)
+    fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
