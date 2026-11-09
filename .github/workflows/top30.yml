@@ -1,0 +1,51 @@
+name: top30-alert
+
+on:
+  schedule:
+    # 4시간마다 (한국시간 01:05 = 일봉 마감 직후 포함). 정각은 붐벼서 5분 비켜감
+    - cron: "5 0,4,8,12,16,20 * * *"
+  workflow_dispatch:
+    inputs:
+      find:
+        description: "방 찾기 (처음 한 번만 체크)"
+        type: boolean
+        default: false
+      test:
+        description: "테스트 (1개만 보내기)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: top30
+  cancel-in-progress: false
+
+jobs:
+  top30:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 한글 폰트 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 거래대금 30개 일봉 보내기
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TOP30_CHAT: ${{ secrets.TOP30_CHAT }}
+        run: |
+          if [ "${{ inputs.find }}" = "true" ]; then
+            python top30.py --find
+          elif [ "${{ inputs.test }}" = "true" ]; then
+            python top30.py --test
+          else
+            python top30.py
+          fi
