@@ -4,7 +4,7 @@ OKX 선물 1시간봉 EMA960 근처 알림
 - 960개 봉이 필요한 선이라, 코인마다 EMA 값을 기록해 두고 5분마다 새 봉만 이어서 계산함
   (처음 며칠 아닌 처음 몇십 분 동안 코인을 나눠서 기록을 쌓음)
 - 현재가가 EMA960 위아래 0.1% 안이면 차트로 알림. 거름 조건 없음, 같은 코인은 4시간 안에 다시 안 알림
-- 차트: EMA960 + 아래 거래대금(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·현재가 + 매일 01시 일봉마감 표시
+- 차트: EMA960 + 아래 거래대금(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line960.py --find   /   테스트: python line960.py --test
 """
 import io
@@ -117,17 +117,17 @@ def chart_series(entry, recent, n=130):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
     day = 24 * HOUR
     start = (cs[-1]["ts"] + 8 * HOUR) // day * day - 8 * HOUR
     today = [c for c in cs if c["ts"] >= start]
     if not today:
         return None
-    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "price": cs[-1]["close"]}
+    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
 def add_extras(ax, axv, bars):
-    """거래대금(아래 칸) + 오늘 시가·고가·현재가 + 매일 한국시간 01시 일봉마감선"""
+    """거래대금(아래 칸) + 오늘 시가·고가·저가·현재가 + 매일 한국시간 01시 일봉마감선"""
     grey = "#90a4ae"
     x = list(range(len(bars)))
     for i, c in enumerate(bars):
@@ -144,7 +144,7 @@ def add_extras(ax, axv, bars):
         axv.set_title(f"거래대금  20봉 평균(검은선)  ·  지금 봉 속도 평균의 {pace / avg:.1f}배", fontsize=12, loc="left")
     ds = day_stats(bars)
     if ds:
-        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("현재가(종가)", ds["price"]))
+        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("저가", ds["low"]), ("현재가(종가)", ds["price"]))
         for label, val in items:
             ax.axhline(val, color=grey, linewidth=1.4, linestyle="--", alpha=0.8)
         y0, y1 = ax.get_ylim()
