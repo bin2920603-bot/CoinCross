@@ -4,6 +4,7 @@ OKX 선물 1시간봉 200일선(EMA200) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 EMA200 위아래 0.1% 안에 들어온 코인을 차트로 알려줌
 - 큰 흐름·봉 색깔·선 기울기 같은 거름 조건 없음. 선 근처에 오면 전부 알림 (근접알림과 별도)
 - cross_alert.py의 텔레그램 전송·지표 함수를 그대로 가져다 씀 (cross_alert.py는 안 바꿈)
+- 차트: 캔들 + EMA200 + 거래대금 + RSI + MACD + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line200.py --find   /   차트 확인용 테스트: python line200.py --test
 """
 import io
@@ -134,7 +135,7 @@ def make_title(inst, a):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
     H = 3600000
     day = 24 * H
     start = (cs[-1]["ts"] + 8 * H) // day * day - 8 * H
@@ -144,11 +145,34 @@ def day_stats(cs):
     return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
-def add_extras(ax, axv, candles, n):
-    """거래량(아래 칸) + 오늘 시가·고가·저가·현재가 + 매일 한국시간 01시 일봉마감선"""
+def draw_osc(axr, axm, r, ml, sg, hs):
+    """아래 두 칸: RSI(14) 와 MACD(12,26,9)"""
+    x = list(range(len(r)))
+    axr.plot(x, r, color="#7b1fa2", linewidth=1.6)
+    axr.axhline(30, color="#26a69a", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(70, color="#ef5350", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(50, color="#90a4ae", linewidth=0.8, alpha=0.6)
+    axr.set_ylim(0, 100)
+    axr.set_yticks([30, 50, 70])
+    axr.set_title(f"RSI(14)  지금 {r[-1]:.0f}  (30 아래 과매도 · 70 위 과매수)", fontsize=12, loc="left")
+    axr.grid(alpha=0.3)
+    axm.bar(x, hs, color=["#26a69a" if h >= 0 else "#ef5350" for h in hs], width=0.7, alpha=0.6)
+    axm.plot(x, ml, color="#1e88e5", linewidth=1.4)
+    axm.plot(x, sg, color="#fb8c00", linewidth=1.4)
+    axm.axhline(0, color="#90a4ae", linewidth=0.8)
+    axm.set_title("MACD(12,26,9)  파랑=MACD선 · 주황=시그널선 · 막대=둘의 차이", fontsize=12, loc="left")
+    axm.grid(alpha=0.3)
+
+
+def add_extras(ax, axv, axr, axm, candles, n):
+    """거래량(아래 칸) + 오늘 시가·고가·현재가 + 매일 한국시간 01시 일봉마감선"""
     cs = candles[-n:]
     x = list(range(len(cs)))
     grey = "#90a4ae"
+    closes_all = [c["close"] for c in candles]
+    r_all = ca.rsi(closes_all, 14)
+    ml_all, sg_all, hs_all = ca.macd(closes_all)
+    draw_osc(axr, axm, r_all[-n:], ml_all[-n:], sg_all[-n:], hs_all[-n:])
     for i, c in enumerate(cs):
         col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
         axv.bar(i, c["quote_vol"], color=col, width=0.7, alpha=0.8)
@@ -181,27 +205,27 @@ def add_extras(ax, axv, candles, n):
     for i, c in enumerate(cs):
         if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
             marks.append(i)
-            for axx in (ax, axv):
+            for axx in (ax, axv, axr, axm):
                 axx.axvline(i - 0.5, color=grey, linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
             ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
                     color="#607d8b", ha="center", va="bottom", fontweight="bold")
     axv.grid(alpha=0.3)
     if len(marks) >= 2:
-        axv.set_xticks([i - 0.5 for i in marks])
-        axv.set_xticklabels([datetime.fromtimestamp(cs[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
+        axm.set_xticks([i - 0.5 for i in marks])
+        axm.set_xticklabels([datetime.fromtimestamp(cs[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
                             fontsize=10, fontweight="bold", color="#607d8b")
     else:
         step = max(1, len(cs) // 8)
-        axv.set_xticks(x[::step])
-        axv.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in cs[::step]], fontsize=9)
+        axm.set_xticks(x[::step])
+        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in cs[::step]], fontsize=9)
 
 
 def make_chart(inst, candles, a):
-    fig, (ax, axv) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
+    fig, (ax, axv, axr, axm) = plt.subplots(4, 1, figsize=(14, 12), sharex=True, gridspec_kw={"height_ratios": [4, 1, 1, 1]})
     draw_panel(ax, candles, a["e200"], a["line"], 130)
-    add_extras(ax, axv, candles, 130)
+    add_extras(ax, axv, axr, axm, candles, 130)
     fig.suptitle(make_title(inst, a), fontsize=20, fontweight="bold", y=0.985)
-    fig.subplots_adjust(left=0.07, right=0.86, top=0.93, bottom=0.06, hspace=0.12)
+    fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
