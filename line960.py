@@ -231,6 +231,9 @@ def make_chart(inst, entry, recent):
     return buf
 
 
+HINT = "📉 숏 유리 (승률 약 47%)\n⚠️ 롱 주의 (승률 약 31%)\n이평선알림 최근 30일 재현 기준 · 손익분기 40%"
+
+
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -285,7 +288,7 @@ def scan(state):
     for _, inst, entry, recent in hits[:MAX_PER_SCAN]:
         try:
             print("[960선]", inst)
-            ca.send_telegram(make_chart(inst, entry, recent), "")
+            ca.send_telegram(make_chart(inst, entry, recent), HINT)
             state["sent"][inst] = int(time.time() * 1000)
             sent += 1
         except Exception as e:
