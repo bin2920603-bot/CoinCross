@@ -233,6 +233,9 @@ def make_chart(inst, candles, a):
     return buf
 
 
+HINT = "📉 숏 유리 (승률 약 47%)\n⚠️ 롱 주의 (승률 약 31%)\n이평선알림 최근 30일 재현 기준 · 손익분기 40%"
+
+
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -274,7 +277,7 @@ def scan(state):
         try:
             caption = make_caption(inst, a)
             print("[200선]", caption.replace("\n", " | "))
-            ca.send_telegram(make_chart(inst, full, a), caption if SHOW_CAPTION else "")
+            ca.send_telegram(make_chart(inst, full, a), caption if SHOW_CAPTION else HINT)
             state[inst] = int(time.time() * 1000)
             sent += 1
         except Exception as e:
