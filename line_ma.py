@@ -267,4 +267,25 @@ def send_test():
     a = analyze(cs)
     name = min(a["lines"], key=lambda k: abs(a["lines"][k]["gap"]))
     for ln, cid in CHATS.items():      # 5개 방에 각각 테스트 차트
-        i
+        if cid:
+            ca.CHAT_ID = cid
+            ca.send_telegram(make_chart(inst, cs, a, ln), f"[테스트] {ln}")
+
+
+def main():
+    ca.setup_korean_font()
+    if "--find" in sys.argv:
+        find_chat()
+        return
+    if not ca.TOKEN or not any(CHATS.values()):
+        print("[알림] TELEGRAM_TOKEN 또는 방 번호가 비어 있어 텔레그램 전송 없이 화면에만 표시합니다.")
+    if "--test" in sys.argv:
+        send_test()
+        return
+    state = load_state()
+    scan(state)
+    save_state(state)
+
+
+if __name__ == "__main__":
+    main()
