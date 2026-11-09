@@ -118,10 +118,13 @@ def make_chart(inst, cs, a, name):
     ax.axhspan(lv * (1 - NEAR), lv * (1 + NEAR), color="#e53935", alpha=0.12)
     ds = day_stats(cs)
     if ds:
-        for label, val in (("시가", ds["open"]), ("고가", ds["high"])):
-            ax.axhline(val, color="#777", linewidth=1, linestyle=(0, (4, 4)))
-            ax.text(len(v) + 1.5, val, f"{label}", fontsize=9, color="#555", va="bottom", ha="right")
-        ax.text(len(v) + 1.5, ds["price"], "현재가", fontsize=9, color="#000", va="bottom", ha="right", fontweight="bold")
+        items = (("시가(=어제 종가)", ds["open"], "#455a64", "--"),
+                 ("고가", ds["high"], "#e65100", "--"),
+                 ("현재가(종가)", ds["price"], "#000000", "-"))
+        for label, val, col, ls in items:
+            ax.axhline(val, color=col, linewidth=1.6, linestyle=ls, alpha=0.9)
+            ax.text(len(v) + 1.8, val, f" {label} {val:.6g} ", fontsize=12, color=col, va="center", ha="right",
+                    fontweight="bold", bbox=dict(facecolor="white", edgecolor=col, alpha=0.9, pad=2))
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(alpha=0.3)
     axv.grid(alpha=0.3)
