@@ -103,7 +103,7 @@ def make_caption(inst, a):
 
 
 def draw_panel(ax, candles, e200_series, line_value, n):
-    """1시간봉 캔들 + EMA200 선 + 선 위아래 띠"""
+    """1시간봉 캔들 + EMA200 선 + 선 위아래 0.5% 띠"""
     cs = candles[-n:]
     x = list(range(len(cs)))
     up, down = "#26a69a", "#ef5350"
@@ -133,11 +133,75 @@ def make_title(inst, a):
     return t
 
 
+def day_stats(cs):
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
+    H = 3600000
+    day = 24 * H
+    start = (cs[-1]["ts"] + 8 * H) // day * day - 8 * H
+    today = [c for c in cs if c["ts"] >= start]
+    if not today:
+        return None
+    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "price": cs[-1]["close"]}
+
+
+def add_extras(ax, axv, candles, n):
+    """거래량(아래 칸) + 오늘 시가·고가·현재가 + 매일 한국시간 01시 일봉마감선"""
+    cs = candles[-n:]
+    x = list(range(len(cs)))
+    grey = "#90a4ae"
+    for i, c in enumerate(cs):
+        col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
+        axv.bar(i, c["quote_vol"], color=col, width=0.7, alpha=0.8)
+    done = [c["quote_vol"] for c in candles[-21:-1]]
+    avg = sum(done) / len(done) if done else 0
+    el = min(1.0, max((time.time() * 1000 - candles[-1]["ts"]) / 3600000, 0.1))
+    pace = candles[-1]["quote_vol"] / el
+    if pace > candles[-1]["quote_vol"]:
+        axv.bar(len(cs) - 1, pace, color="none", edgecolor="#222", linestyle="--", linewidth=1.2, width=0.7)
+    if avg > 0:
+        axv.axhline(avg, color="#555", linewidth=1.2)
+        axv.set_title(f"거래대금  20봉 평균(검은선)  ·  지금 봉 속도 평균의 {pace / avg:.1f}배", fontsize=12, loc="left")
+    ds = day_stats(candles)
+    if ds:
+        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("현재가(종가)", ds["price"]))
+        for label, val in items:
+            ax.axhline(val, color=grey, linewidth=1.4, linestyle="--", alpha=0.8)
+        y0, y1 = ax.get_ylim()
+        gap = (y1 - y0) * 0.085
+        pos = []
+        order = sorted(items, key=lambda t: -t[1])
+        for _, val in order:
+            pos.append(val if not pos else min(val, pos[-1] - gap))
+        for (label, val), y in zip(order, pos):
+            ax.annotate(f"{label}\n{val:.6g}", xy=(1.0, val), xytext=(1.015, y), xycoords=ax.get_yaxis_transform(),
+                        textcoords=ax.get_yaxis_transform(), fontsize=11, color="#607d8b", va="center", ha="left",
+                        fontweight="bold", annotation_clip=False,
+                        arrowprops=dict(arrowstyle="-", color=grey, linewidth=1, shrinkA=0, shrinkB=0))
+    marks = []
+    for i, c in enumerate(cs):
+        if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
+            marks.append(i)
+            for axx in (ax, axv):
+                axx.axvline(i - 0.5, color=grey, linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
+            ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
+                    color="#607d8b", ha="center", va="bottom", fontweight="bold")
+    axv.grid(alpha=0.3)
+    if len(marks) >= 2:
+        axv.set_xticks([i - 0.5 for i in marks])
+        axv.set_xticklabels([datetime.fromtimestamp(cs[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
+                            fontsize=10, fontweight="bold", color="#607d8b")
+    else:
+        step = max(1, len(cs) // 8)
+        axv.set_xticks(x[::step])
+        axv.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in cs[::step]], fontsize=9)
+
+
 def make_chart(inst, candles, a):
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, (ax, axv) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
     draw_panel(ax, candles, a["e200"], a["line"], 130)
+    add_extras(ax, axv, candles, 130)
     fig.suptitle(make_title(inst, a), fontsize=20, fontweight="bold", y=0.985)
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.07)
+    fig.subplots_adjust(left=0.07, right=0.86, top=0.93, bottom=0.06, hspace=0.12)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
