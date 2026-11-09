@@ -3,7 +3,7 @@
 OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
-- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
+- 차트: 이평선 + 거래량(20봉 평균, 지금 봉 속도 환산) + RSI + MACD + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -83,11 +83,34 @@ def day_stats(cs):
     return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
+def draw_osc(axr, axm, r, ml, sg, hs):
+    """아래 두 칸: RSI(14) 와 MACD(12,26,9)"""
+    x = list(range(len(r)))
+    axr.plot(x, r, color="#7b1fa2", linewidth=1.6)
+    axr.axhline(30, color="#26a69a", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(70, color="#ef5350", linewidth=1, linestyle="--", alpha=0.8)
+    axr.axhline(50, color="#90a4ae", linewidth=0.8, alpha=0.6)
+    axr.set_ylim(0, 100)
+    axr.set_yticks([30, 50, 70])
+    axr.set_title(f"RSI(14)  지금 {r[-1]:.0f}  (30 아래 과매도 · 70 위 과매수)", fontsize=12, loc="left")
+    axr.grid(alpha=0.3)
+    axm.bar(x, hs, color=["#26a69a" if h >= 0 else "#ef5350" for h in hs], width=0.7, alpha=0.6)
+    axm.plot(x, ml, color="#1e88e5", linewidth=1.4)
+    axm.plot(x, sg, color="#fb8c00", linewidth=1.4)
+    axm.axhline(0, color="#90a4ae", linewidth=0.8)
+    axm.set_title("MACD(12,26,9)  파랑=MACD선 · 주황=시그널선 · 막대=둘의 차이", fontsize=12, loc="left")
+    axm.grid(alpha=0.3)
+
+
 def make_chart(inst, cs, a, name):
-    fig, (ax, axv) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
+    fig, (ax, axv, axr, axm) = plt.subplots(4, 1, figsize=(14, 12), sharex=True, gridspec_kw={"height_ratios": [4, 1, 1, 1]})
     n = 130
     v = cs[-n:]
     x = list(range(len(v)))
+    closes_all = [c["close"] for c in cs]
+    r_all = ca.rsi(closes_all, 14)
+    ml_all, sg_all, hs_all = ca.macd(closes_all)
+    draw_osc(axr, axm, r_all[-n:], ml_all[-n:], sg_all[-n:], hs_all[-n:])
     for i, c in enumerate(v):
         col = "#26a69a" if c["close"] >= c["open"] else "#ef5350"
         ax.vlines(i, c["low"], c["high"], color=col, linewidth=1)
@@ -137,12 +160,12 @@ def make_chart(inst, cs, a, name):
                         textcoords=ax.get_yaxis_transform(), fontsize=11, color="#607d8b", va="center", ha="left",
                         fontweight="bold", annotation_clip=False,
                         arrowprops=dict(arrowstyle="-", color=col, linewidth=1, shrinkA=0, shrinkB=0))
-    # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 세로선 + 큰 글자
+    # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 진한 세로선 + 큰 글자
     marks = []
     for i, c in enumerate(v):
         if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
             marks.append(i)
-            for axx in (ax, axv):
+            for axx in (ax, axv, axr, axm):
                 axx.axvline(i - 0.5, color="#90a4ae", linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
             ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
                     color="#607d8b", ha="center", va="bottom", fontweight="bold")
@@ -150,19 +173,19 @@ def make_chart(inst, cs, a, name):
     ax.grid(alpha=0.3)
     axv.grid(alpha=0.3)
     if len(marks) >= 2:
-        axv.set_xticks([i - 0.5 for i in marks])
-        axv.set_xticklabels([datetime.fromtimestamp(v[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
+        axm.set_xticks([i - 0.5 for i in marks])
+        axm.set_xticklabels([datetime.fromtimestamp(v[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
                             fontsize=10, fontweight="bold", color="#607d8b")
     else:
         step = max(1, len(v) // 8)
-        axv.set_xticks(x[::step])
-        axv.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in v[::step]], fontsize=9)
+        axm.set_xticks(x[::step])
+        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in v[::step]], fontsize=9)
     ax.set_xlim(-1, len(v) + 2)
     g = a["lines"][name]
     side = "위" if g["gap"] >= 0 else "아래"
     fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  1시간봉 {name} 근처 · 선 {side} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
-    fig.subplots_adjust(left=0.07, right=0.86, top=0.93, bottom=0.06, hspace=0.12)
+    fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
@@ -244,25 +267,4 @@ def send_test():
     a = analyze(cs)
     name = min(a["lines"], key=lambda k: abs(a["lines"][k]["gap"]))
     for ln, cid in CHATS.items():      # 5개 방에 각각 테스트 차트
-        if cid:
-            ca.CHAT_ID = cid
-            ca.send_telegram(make_chart(inst, cs, a, ln), f"[테스트] {ln}")
-
-
-def main():
-    ca.setup_korean_font()
-    if "--find" in sys.argv:
-        find_chat()
-        return
-    if not ca.TOKEN or not any(CHATS.values()):
-        print("[알림] TELEGRAM_TOKEN 또는 방 번호가 비어 있어 텔레그램 전송 없이 화면에만 표시합니다.")
-    if "--test" in sys.argv:
-        send_test()
-        return
-    state = load_state()
-    scan(state)
-    save_state(state)
-
-
-if __name__ == "__main__":
-    main()
+        i
