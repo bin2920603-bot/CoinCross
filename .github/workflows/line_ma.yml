@@ -44,6 +44,7 @@ jobs:
       - name: 이평선 근처 찾기
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          LINEMA_CHAT_7: ${{ secrets.LINEMA_CHAT_7 }}
           LINEMA_CHAT_20: ${{ secrets.LINEMA_CHAT_20 }}
           LINEMA_CHAT_50: ${{ secrets.LINEMA_CHAT_50 }}
           LINEMA_CHAT_120: ${{ secrets.LINEMA_CHAT_120 }}
