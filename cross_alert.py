@@ -382,6 +382,16 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     ax1.set_ylim(y_lo, y_hi)
     ax1.set_xlim(-1, n + TREND_EXT)
     draw_day_lines(ax1, candles, n)
+    # 매일 한국시간 01시 = 일봉이 마감되는 자리에 세로 점선 + 작은 글자 (1시간봉·15분봉 칸에만)
+    if label in ("1시간봉", "15분봉"):
+        for i, c in enumerate(cs):
+            t = datetime.fromtimestamp(c["ts"] / 1000, KST)
+            if t.hour == 1 and t.minute == 0 and i > 0:
+                for axx in (ax1, ax_rsi, ax_macd, ax2):
+                    axx.axvline(i - 0.5, color="#90a4ae", linewidth=1.2, linestyle=(0, (2, 2)), alpha=0.9)
+                if i >= 14:      # 왼쪽 끝은 칸 제목과 겹쳐서 글자는 생략
+                    ax1.text(i - 0.5, 1.0, "01시 마감", transform=ax1.get_xaxis_transform(), fontsize=9,
+                             color="#607d8b", ha="center", va="bottom", fontweight="bold")
 
     ax1.set_title(label, fontsize=18, fontweight="bold", loc="left")
     ax1.legend(loc="upper left", fontsize=8)
