@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-OKX 선물 1시간봉 이평선(EMA20·EMA50·EMA120·거래량가중100) 근처 알림
-- 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 4개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
+OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
+- 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
@@ -26,9 +26,9 @@ MAX_PER_SCAN = 8
 SHOW_CAPTION = False
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "line_ma_state.json")
 # 선마다 따로 받는 방 (방 번호는 GitHub 비밀 칸에 저장)
-CHATS = {"EMA20": os.environ.get("LINEMA_CHAT_20", ""), "EMA50": os.environ.get("LINEMA_CHAT_50", ""),
+CHATS = {"EMA7": os.environ.get("LINEMA_CHAT_7", ""), "EMA20": os.environ.get("LINEMA_CHAT_20", ""), "EMA50": os.environ.get("LINEMA_CHAT_50", ""),
          "EMA120": os.environ.get("LINEMA_CHAT_120", ""), "거가중100": os.environ.get("LINEMA_CHAT_V100", "")}
-LINES = [("EMA20", "#fb8c00"), ("EMA50", "#43a047"), ("EMA120", "#1e88e5"), ("거가중100", "#8e24aa")]
+LINES = [("EMA7", "#d81b60"), ("EMA20", "#fb8c00"), ("EMA50", "#43a047"), ("EMA120", "#1e88e5"), ("거가중100", "#8e24aa")]
 
 
 def get_candles(inst, bar="1H"):
@@ -59,7 +59,7 @@ def analyze(cs):
     if len(cs) < 160:
         return None
     closes = [c["close"] for c in cs]
-    series = {"EMA20": ca.ema(closes, 20), "EMA50": ca.ema(closes, 50),
+    series = {"EMA7": ca.ema(closes, 7), "EMA20": ca.ema(closes, 20), "EMA50": ca.ema(closes, 50),
               "EMA120": ca.ema(closes, 120), "거가중100": vwap_series(cs)}
     price = closes[-1]
     res = {}
@@ -180,7 +180,7 @@ def send_test():
     cs = get_candles(inst)
     a = analyze(cs)
     name = min(a["lines"], key=lambda k: abs(a["lines"][k]["gap"]))
-    for ln, cid in CHATS.items():      # 4개 방에 각각 테스트 차트
+    for ln, cid in CHATS.items():      # 5개 방에 각각 테스트 차트
         if cid:
             ca.CHAT_ID = cid
             ca.send_telegram(make_chart(inst, cs, a, ln), f"[테스트] {ln}")
