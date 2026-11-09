@@ -302,6 +302,38 @@ def draw_trendlines(ax, cs):
             first = False
 
 
+def day_stats(cs):
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
+    H = 3600000
+    day = 24 * H
+    start = (cs[-1]["ts"] + 8 * H) // day * day - 8 * H
+    today = [c for c in cs if c["ts"] >= start]
+    if not today:
+        return None
+    return {"시가": today[0]["open"], "고가": max(c["high"] for c in today),
+            "저가": min(c["low"] for c in today), "현재가": cs[-1]["close"]}
+
+
+def draw_day_lines(ax, candles, n):
+    """오늘 시가·고가·저가·현재가를 연한 회색 점선 + 작은 글자로 (글자는 오른쪽 빈 자리에)"""
+    ds = day_stats(candles)
+    if not ds:
+        return
+    grey, txt = "#90a4ae", "#607d8b"
+    items = sorted(ds.items(), key=lambda t: -t[1])
+    for _, v in items:
+        ax.axhline(v, color=grey, linewidth=1.0, linestyle="--", alpha=0.8)
+    y0, y1 = ax.get_ylim()
+    gap = (y1 - y0) * 0.07
+    pos = []
+    for _, v in items:
+        pos.append(v if not pos else min(v, pos[-1] - gap))
+    for (name, v), y in zip(items, pos):
+        ax.annotate(f"{name} {fmt_price(v)}", xy=(n + 1, v), xytext=(n + 2, y), xycoords="data", textcoords="data",
+                    fontsize=8, color=txt, va="center", ha="left", fontweight="bold", annotation_clip=False,
+                    arrowprops=dict(arrowstyle="-", color=grey, linewidth=0.7, shrinkA=0, shrinkB=0))
+
+
 # ----- 차트 -----
 def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     """차트 1개(가격+EMA / RSI / MACD / 거래대금 4칸)를 spec 자리에 그림.
@@ -349,6 +381,7 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     draw_trendlines(ax1, cs)
     ax1.set_ylim(y_lo, y_hi)
     ax1.set_xlim(-1, n + TREND_EXT)
+    draw_day_lines(ax1, candles, n)
 
     ax1.set_title(label, fontsize=18, fontweight="bold", loc="left")
     ax1.legend(loc="upper left", fontsize=8)
