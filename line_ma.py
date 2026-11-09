@@ -3,7 +3,7 @@
 OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
-- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·현재가
+- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -121,10 +121,23 @@ def make_chart(inst, cs, a, name):
         items = (("시가(=어제 종가)", ds["open"], "#455a64", "--"),
                  ("고가", ds["high"], "#e65100", "--"),
                  ("현재가(종가)", ds["price"], "#000000", "-"))
+        close_gap = abs(ds["open"] - ds["high"]) < ds["price"] * 0.004
         for label, val, col, ls in items:
             ax.axhline(val, color=col, linewidth=1.6, linestyle=ls, alpha=0.9)
-            ax.text(len(v) + 1.8, val, f" {label} {val:.6g} ", fontsize=12, color=col, va="center", ha="right",
+            va = "center"
+            if close_gap and label.startswith("시가"):
+                va = "top"          # 시가와 고가가 붙어 있으면 시가 글자는 선 아래로
+            elif close_gap and label.startswith("고가"):
+                va = "bottom"       # 고가 글자는 선 위로
+            ax.text(len(v) + 1.8, val, f" {label} {val:.6g} ", fontsize=12, color=col, va=va, ha="right",
                     fontweight="bold", bbox=dict(facecolor="white", edgecolor=col, alpha=0.9, pad=2))
+    # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 세로선
+    for i, c in enumerate(v):
+        if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
+            for axx in (ax, axv):
+                axx.axvline(i - 0.5, color="#8d6e63", linewidth=1.2, linestyle=":")
+            ax.text(i - 0.5, 1.0, "01시 일봉마감", transform=ax.get_xaxis_transform(), fontsize=9,
+                    color="#5d4037", ha="center", va="bottom")
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(alpha=0.3)
     axv.grid(alpha=0.3)
