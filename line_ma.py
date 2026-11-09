@@ -3,7 +3,7 @@
 OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
-- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·현재가 + 매일 01시 일봉마감 표시
+- 차트: 이평선 + 아래 거래량(20봉 평균, 지금 봉 속도 환산) + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -72,7 +72,7 @@ def analyze(cs):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
     H = 3600000
     day = 24 * H
     last = cs[-1]["ts"]
@@ -80,7 +80,7 @@ def day_stats(cs):
     today = [c for c in cs if c["ts"] >= start]
     if not today:
         return None
-    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "price": cs[-1]["close"]}
+    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
 def make_chart(inst, cs, a, name):
@@ -120,6 +120,7 @@ def make_chart(inst, cs, a, name):
     if ds:
         items = (("시가(=어제 종가)", ds["open"], "#90a4ae", "--"),
                  ("고가", ds["high"], "#90a4ae", "--"),
+                 ("저가", ds["low"], "#90a4ae", "--"),
                  ("현재가(종가)", ds["price"], "#90a4ae", "--"))
         for label, val, col, ls in items:
             ax.axhline(val, color=col, linewidth=1.4, linestyle=ls, alpha=0.8)
