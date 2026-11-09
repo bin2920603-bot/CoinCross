@@ -118,11 +118,11 @@ def make_chart(inst, cs, a, name):
     ax.axhspan(lv * (1 - NEAR), lv * (1 + NEAR), color="#e53935", alpha=0.12)
     ds = day_stats(cs)
     if ds:
-        items = (("시가(=어제 종가)", ds["open"], "#455a64", "--"),
-                 ("고가", ds["high"], "#e65100", "--"),
-                 ("현재가(종가)", ds["price"], "#000000", "-"))
+        items = (("시가(=어제 종가)", ds["open"], "#90a4ae", "--"),
+                 ("고가", ds["high"], "#90a4ae", "--"),
+                 ("현재가(종가)", ds["price"], "#90a4ae", "--"))
         for label, val, col, ls in items:
-            ax.axhline(val, color=col, linewidth=1.6, linestyle=ls, alpha=0.9)
+            ax.axhline(val, color=col, linewidth=1.4, linestyle=ls, alpha=0.8)
         # 오른쪽 바깥 칸에 글자를 세로로 펼쳐서 서로 안 겹치게 (선과는 가는 줄로 이어줌)
         y0, y1 = ax.get_ylim()
         gap = (y1 - y0) * 0.085
@@ -133,25 +133,25 @@ def make_chart(inst, cs, a, name):
             pos.append(y)
         for (label, val, col, ls), y in zip(order, pos):
             ax.annotate(f"{label}\n{val:.6g}", xy=(1.0, val), xytext=(1.015, y), xycoords=ax.get_yaxis_transform(),
-                        textcoords=ax.get_yaxis_transform(), fontsize=11, color=col, va="center", ha="left",
+                        textcoords=ax.get_yaxis_transform(), fontsize=11, color="#607d8b", va="center", ha="left",
                         fontweight="bold", annotation_clip=False,
                         arrowprops=dict(arrowstyle="-", color=col, linewidth=1, shrinkA=0, shrinkB=0))
-    # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 진한 세로선 + 큰 글자
+    # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 세로선 + 큰 글자
     marks = []
     for i, c in enumerate(v):
         if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
             marks.append(i)
             for axx in (ax, axv):
-                axx.axvline(i - 0.5, color="#6d4c41", linewidth=1.8, linestyle=(0, (2, 2)))
+                axx.axvline(i - 0.5, color="#90a4ae", linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
             ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
-                    color="#4e342e", ha="center", va="bottom", fontweight="bold")
+                    color="#607d8b", ha="center", va="bottom", fontweight="bold")
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(alpha=0.3)
     axv.grid(alpha=0.3)
     if len(marks) >= 2:
         axv.set_xticks([i - 0.5 for i in marks])
         axv.set_xticklabels([datetime.fromtimestamp(v[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
-                            fontsize=10, fontweight="bold", color="#4e342e")
+                            fontsize=10, fontweight="bold", color="#607d8b")
     else:
         step = max(1, len(v) // 8)
         axv.set_xticks(x[::step])
