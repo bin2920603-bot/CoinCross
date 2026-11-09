@@ -134,18 +134,18 @@ def make_title(inst, a):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
     H = 3600000
     day = 24 * H
     start = (cs[-1]["ts"] + 8 * H) // day * day - 8 * H
     today = [c for c in cs if c["ts"] >= start]
     if not today:
         return None
-    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "price": cs[-1]["close"]}
+    return {"open": today[0]["open"], "high": max(c["high"] for c in today), "low": min(c["low"] for c in today), "price": cs[-1]["close"]}
 
 
 def add_extras(ax, axv, candles, n):
-    """거래량(아래 칸) + 오늘 시가·고가·현재가 + 매일 한국시간 01시 일봉마감선"""
+    """거래량(아래 칸) + 오늘 시가·고가·저가·현재가 + 매일 한국시간 01시 일봉마감선"""
     cs = candles[-n:]
     x = list(range(len(cs)))
     grey = "#90a4ae"
@@ -163,7 +163,7 @@ def add_extras(ax, axv, candles, n):
         axv.set_title(f"거래대금  20봉 평균(검은선)  ·  지금 봉 속도 평균의 {pace / avg:.1f}배", fontsize=12, loc="left")
     ds = day_stats(candles)
     if ds:
-        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("현재가(종가)", ds["price"]))
+        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("저가", ds["low"]), ("현재가(종가)", ds["price"]))
         for label, val in items:
             ax.axhline(val, color=grey, linewidth=1.4, linestyle="--", alpha=0.8)
         y0, y1 = ax.get_ylim()
