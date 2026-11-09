@@ -3,7 +3,6 @@
 OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
 - 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
 - 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
-- 차트: 이평선 + 거래량(20봉 평균, 지금 봉 속도 환산) + RSI + MACD + 오늘 시가·고가·저가·현재가 + 매일 01시 일봉마감 표시
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -72,7 +71,7 @@ def analyze(cs):
 
 
 def day_stats(cs):
-    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가·저가. 현재가는 마지막 봉 종가"""
+    """오늘(OKX 일봉 기준, 한국시간 01시 시작) 시가·고가. 현재가는 마지막 봉 종가"""
     H = 3600000
     day = 24 * H
     last = cs[-1]["ts"]
@@ -193,6 +192,15 @@ def make_chart(inst, cs, a, name):
     return buf
 
 
+def hint(g):
+    """최근 30일 재현 승률표 기준 한 줄 (조건은 안 바꾸고 표시만)"""
+    if g["gap"] < 0 and g["slope"] < 0:
+        return "📉 숏 유리 · 내리는 선 아래 (최근 30일 승률 약 47%)"
+    if g["gap"] >= 0 and g["slope"] > 0:
+        return "⚠️ 롱 주의 · 오르는 선 위 (최근 30일 승률 약 30%)"
+    return ""
+
+
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -233,7 +241,7 @@ def scan(state):
         try:
             print("[이평선]", inst, name)
             ca.CHAT_ID = CHATS[name]
-            ca.send_telegram(make_chart(inst, cs, a, name), "")
+            ca.send_telegram(make_chart(inst, cs, a, name), hint(a["lines"][name]))
             state[f"{inst}|{name}"] = int(time.time() * 1000)
             sent += 1
         except Exception as e:
