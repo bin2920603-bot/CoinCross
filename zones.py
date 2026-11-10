@@ -18,6 +18,8 @@ SHIFT = 26              # 구름이 앞으로 나가는 봉 수
 SHOW_HA = True          # 하이킨아시 작은 칸 표시 (끄려면 False)
 SMALL_H = 0.074         # 아래 작은 칸(하이킨아시·거래대금·RSI·MACD) 한 칸 높이 (그림 전체 대비)
 SMALL_GAP = 0.038       # 칸 사이 간격
+TREND_MIN_GAP = 8       # 추세선 두 점 사이 최소 간격(봉)
+TREND_MAX_SLOPE = 0.012 # 하루에 가격의 이 비율보다 가파르면 추세선으로 안 그림
 
 
 def pivots(view):
@@ -117,6 +119,23 @@ def add_ha(ax, cs, n):
     ha_ax.tick_params(labelbottom=False)
 
 
+def trend_line(pts, n, price, y0, y1):
+    """가까운 고점/저점 2개를 이어 추세선을 만듦. 너무 가파르거나 차트 밖으로 나가는 선은 버리고 다른 쌍을 찾음"""
+    last = pts[-5:]
+    for j in range(len(last) - 1, 0, -1):
+        for i in range(j - 1, -1, -1):
+            (xa, ya), (xb, yb) = last[i], last[j]
+            if xb - xa < TREND_MIN_GAP:
+                continue
+            slope = (yb - ya) / (xb - xa)
+            if abs(slope) > price * TREND_MAX_SLOPE:
+                continue
+            end = yb + slope * (n + 2 - xb)
+            if y0 <= end <= y1:
+                return xa, ya, end
+    return None
+
+
 def overlay(ax, cs):
     n = min(SHOW_BARS, len(cs))
     view = cs[-n:]
@@ -127,12 +146,10 @@ def overlay(ax, cs):
         ax.axhspan(zl * 0.997, zh * 1.003, color="#2e7d32", alpha=0.18, zorder=0)
     for zl, zh, k in make_zones(hi, price, True):           # 저항: 빨강 박스
         ax.axhspan(zl * 0.997, zh * 1.003, color="#c62828", alpha=0.18, zorder=0)
-    if len(lo) >= 2:                                         # 추세선: 마지막 저점 2개(초록 점선)
-        (xa, ya), (xb, yb) = lo[-2], lo[-1]
-        ax.plot([xa, n + 2], [ya, yb + (yb - ya) / (xb - xa) * (n + 2 - xb)], color="#2e7d32", linestyle="--", linewidth=1.3, zorder=1)
-    if len(hi) >= 2:                                         # 추세선: 마지막 고점 2개(빨강 점선)
-        (xa, ya), (xb, yb) = hi[-2], hi[-1]
-        ax.plot([xa, n + 2], [ya, yb + (yb - ya) / (xb - xa) * (n + 2 - xb)], color="#c62828", linestyle="--", linewidth=1.3, zorder=1)
+    for pts, col in ((lo, "#2e7d32"), (hi, "#c62828")):      # 추세선: 저점끼리(초록)·고점끼리(빨강) 이은 점선
+        t = trend_line(pts, n, price, y0, y1)
+        if t:
+            ax.plot([t[0], n + 2], [t[1], t[2]], color=col, linestyle="--", linewidth=1.3, zorder=1)
     ax.set_ylim(y0, y1)                                      # 박스 때문에 차트 크기가 안 바뀌게 고정
     rs = ca.rsi([c["close"] for c in cs], 14)[-n:]           # 과매도/과매수 표시
     gap = (y1 - y0) * 0.025
