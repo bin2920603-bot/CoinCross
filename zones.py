@@ -3,6 +3,7 @@
 일봉 차트 위에 얹는 표시 (all_daily.py가 가져다 씀)
 - 지지(초록)·저항(빨강) 박스, 추세선(점선), 정배열/역배열 글자
 - 과매도(RSI 30 이하) 파란 ▲ / 과매수(RSI 70 이상) 빨간 ▼ 를 캔들 옆에 표시
+- 일목균형표 구름(선행스팬 A·B, 26일 앞까지): 파랑 구름 = A가 위(상승 구름) / 주황 구름 = B가 위(하락 구름)
 """
 import cross_alert as ca
 
@@ -11,6 +12,8 @@ ZONE_PCT = 0.015        # 가격이 이 비율 안에 모이면 같은 박스로
 SHOW_BARS = 120
 RSI_LOW = 30            # 이 값 이하면 과매도 ▲
 RSI_HIGH = 70           # 이 값 이상이면 과매수 ▼
+SHOW_CLOUD = True       # 일목 구름 표시 (끄려면 False)
+SHIFT = 26              # 구름이 앞으로 나가는 봉 수
 
 
 def pivots(view):
@@ -43,6 +46,32 @@ def make_zones(pts, price, above):
     return zones[:2]
 
 
+def mid(cs, i, n):
+    """i번째 봉까지 n봉의 (최고가+최저가)/2"""
+    w = cs[max(0, i - n + 1):i + 1]
+    return (max(c["high"] for c in w) + min(c["low"] for c in w)) / 2
+
+
+def draw_cloud(ax, cs, n):
+    """일목 구름: 선행스팬A=(전환선9+기준선26)/2, 선행스팬B=52봉 중간값. 둘 다 26봉 앞으로 밀어서 그림"""
+    total = len(cs)
+    first = total - n
+    xs, a_vals, b_vals = [], [], []
+    for j in range(n + SHIFT):
+        src = first + j - SHIFT                      # 이 자리의 구름은 26봉 전 값으로 만든 것
+        if src < 51 or src > total - 1:
+            continue
+        a_vals.append((mid(cs, src, 9) + mid(cs, src, 26)) / 2)
+        b_vals.append(mid(cs, src, 52))
+        xs.append(j)
+    if len(xs) < 2:
+        return
+    ax.fill_between(xs, a_vals, b_vals, where=[a >= b for a, b in zip(a_vals, b_vals)],
+                    color="#42a5f5", alpha=0.16, linewidth=0, interpolate=True, zorder=0)
+    ax.fill_between(xs, a_vals, b_vals, where=[a < b for a, b in zip(a_vals, b_vals)],
+                    color="#ffa726", alpha=0.18, linewidth=0, interpolate=True, zorder=0)
+
+
 def overlay(ax, cs):
     n = min(SHOW_BARS, len(cs))
     view = cs[-n:]
@@ -69,6 +98,9 @@ def overlay(ax, cs):
             ax.scatter(i, c["low"] - gap, marker="^", s=60, color="#1565c0", zorder=5)
         elif rs[i] >= RSI_HIGH:
             ax.scatter(i, c["high"] + gap, marker="v", s=60, color="#d50000", zorder=5)
+    if SHOW_CLOUD:
+        draw_cloud(ax, cs, n)
+        ax.set_xlim(-1, n + SHIFT + 2)                       # 구름이 앞으로 나가는 만큼 오른쪽 여백
     ax.set_ylim(y0, y1)
     closes = [c["close"] for c in cs]
     e20, e50, e120 = ca.ema(closes, 20)[-1], ca.ema(closes, 50)[-1], ca.ema(closes, 120)[-1]
