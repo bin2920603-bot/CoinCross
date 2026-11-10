@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-OKX 선물 1시간봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
-- 5분마다 거래대금 상위 코인의 1시간봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
-- 거름 조건 없음. 같은 코인·같은 선은 4시간 안에 다시 알리지 않음
+OKX 선물 일봉 이평선(EMA7·EMA20·EMA50·EMA120·거래량가중100) 근처 알림
+- 5분마다 거래대금 상위 코인의 일봉을 훑어서, 현재가가 5개 선 중 하나의 위아래 0.1% 안에 들어오면 차트로 알려줌
+- 거름 조건 없음. 같은 코인·같은 선은 24시간 안에 다시 알리지 않음
 - 방 번호 찾기: python line_ma.py --find   /   테스트: python line_ma.py --test
 """
 import io
@@ -21,7 +21,9 @@ import cross_alert as ca
 # ----- 설정값 -----
 TOP_N = 200
 NEAR = 0.001           # 선 위아래 0.1% 안이면 '근처'
-COOLDOWN_H = 4
+COOLDOWN_H = 24
+BAR = "1D"             # 일봉 (OKX 기본 일봉 = 한국시간 새벽 1시 마감). 1시간봉으로 되돌리려면 "1H"
+BAR_H = 24             # 봉 하나의 시간(시간 단위). 일봉 24 / 1시간봉 1
 MAX_PER_SCAN = 8
 SHOW_CAPTION = False
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "line_ma_state.json")
@@ -31,7 +33,7 @@ CHATS = {"EMA7": os.environ.get("LINEMA_CHAT_7", ""), "EMA20": os.environ.get("L
 LINES = [("EMA7", "#d81b60"), ("EMA20", "#fb8c00"), ("EMA50", "#43a047"), ("EMA120", "#1e88e5"), ("거가중100", "#8e24aa")]
 
 
-def get_candles(inst, bar="1H"):
+def get_candles(inst, bar=BAR):
     r = ca.session.get(ca.OKX + "/api/v5/market/candles",
                        params={"instId": inst, "bar": bar, "limit": 300}, timeout=15)
     r.raise_for_status()
@@ -119,7 +121,7 @@ def make_chart(inst, cs, a, name):
     # 거래량: 지금 진행 중인 봉은 1시간 속도로 환산해서 점선 막대로 함께 표시
     done = [c["vol"] for c in cs[-21:-1]]
     avg = sum(done) / len(done) if done else 0
-    el = (time.time() * 1000 - cs[-1]["ts"]) / 3600000
+    el = (time.time() * 1000 - cs[-1]["ts"]) / (3600000 * BAR_H)
     el = min(1.0, max(el, 0.1))
     pace = cs[-1]["vol"] / el
     last_i = len(v) - 1
@@ -128,7 +130,7 @@ def make_chart(inst, cs, a, name):
     if avg > 0:
         axv.axhline(avg, color="#555", linewidth=1.2)
         ratio = pace / avg
-        axv.set_title(f"거래량  20봉 평균(검은선)  ·  지금 봉 속도 평균의 {ratio:.1f}배", fontsize=12, loc="left")
+        axv.set_title(f"거래량  20봉 평균(검은선)  ·  오늘 속도 평균의 {ratio:.1f}배", fontsize=12, loc="left")
     for ln, color in LINES:
         s = a["series"][ln][-n:]
         pts = [(i, y) for i, y in zip(x, s) if y]
@@ -162,7 +164,7 @@ def make_chart(inst, cs, a, name):
     # 매일 한국시간 01시 = 일봉이 끝나는(종가) 자리에 진한 세로선 + 큰 글자
     marks = []
     for i, c in enumerate(v):
-        if datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
+        if BAR_H == 1 and datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
             marks.append(i)
             for axx in (ax, axv, axr, axm):
                 axx.axvline(i - 0.5, color="#90a4ae", linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
@@ -178,11 +180,11 @@ def make_chart(inst, cs, a, name):
     else:
         step = max(1, len(v) // 8)
         axm.set_xticks(x[::step])
-        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d %H:%M") for c in v[::step]], fontsize=9)
+        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d" if BAR_H == 24 else "%m-%d %H:%M") for c in v[::step]], fontsize=9)
     ax.set_xlim(-1, len(v) + 2)
     g = a["lines"][name]
     side = "위" if g["gap"] >= 0 else "아래"
-    fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  1시간봉 {name} 근처 · 선 {side} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}",
+    fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  일봉 {name} 근처 · 선 {side} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
     fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
     buf = io.BytesIO()
@@ -193,11 +195,8 @@ def make_chart(inst, cs, a, name):
 
 
 def hint(g):
-    """최근 30일 재현 승률표 기준 한 줄 (조건은 안 바꾸고 표시만). 숫자는 롱/숏 승률(%)"""
-    up = g["slope"] > 0
-    above = g["gap"] >= 0
-    lo, sh = {(True, True): (30, 49), (False, True): (31, 48), (True, False): (33, 46), (False, False): (31, 47)}[(above, up)]
-    return f"📉 숏 유리 (승률 {sh}%)\n⚠️ 롱 주의 (승률 {lo}%)\n최근 30일 재현 기준 · 손익분기 40%"
+    """일봉 기준 한 줄 (1시간봉 승률표는 일봉에 안 맞아서 뺌)"""
+    return f"일봉 근처 · 선 {'위' if g['gap'] >= 0 else '아래'} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}"
 
 
 def load_state():
@@ -209,7 +208,7 @@ def load_state():
 
 
 def save_state(state):
-    cutoff = time.time() * 1000 - 24 * 3600 * 1000
+    cutoff = time.time() * 1000 - 48 * 3600 * 1000
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({k: v for k, v in state.items() if v >= cutoff}, f)
 
