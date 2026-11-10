@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import cross_alert as ca
+import zones            # 지지·저항 박스, 추세선, 과매도/과매수, 일목 구름, 하이킨아시 (zones.py)
 
 # ----- 설정값 -----
 TOP_N = 30             # 24시간 거래대금 상위 몇 개를 볼지
@@ -135,6 +136,11 @@ def make_chart(inst, cs, rank):
     fig.suptitle(f"거래대금 {rank}위  {inst.replace('-USDT-SWAP', '')}  일봉  {ca.fmt_price(cs[-1]['close'])}  ({chg:+.1f}%)",
                  fontsize=20, fontweight="bold", y=0.985)
     fig.subplots_adjust(left=0.07, right=0.97, top=0.945, bottom=0.045, hspace=0.3)
+    if getattr(plt.subplots, "__module__", "") != "all_daily":   # all_daily.py가 이미 같은 표시를 얹어서 부를 땐 건너뜀
+        try:
+            zones.overlay(ax, cs)
+        except Exception as e:
+            print(f"[박스 오류] {inst}: {e}")
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
