@@ -16,7 +16,8 @@ RSI_HIGH = 70           # 이 값 이상이면 과매수 ▼
 SHOW_CLOUD = True       # 일목 구름 표시 (끄려면 False)
 SHIFT = 26              # 구름이 앞으로 나가는 봉 수
 SHOW_HA = True          # 하이킨아시 작은 칸 표시 (끄려면 False)
-HA_SHARE = 0.16         # 하이킨아시 칸이 차지하는 전체 높이 비율
+SMALL_H = 0.074         # 아래 작은 칸(하이킨아시·거래대금·RSI·MACD) 한 칸 높이 (그림 전체 대비)
+SMALL_GAP = 0.038       # 칸 사이 간격
 
 
 def pivots(view):
@@ -86,7 +87,7 @@ def heikin(cs):
 
 
 def add_ha(ax, cs, n):
-    """메인 차트 바로 아래에 하이킨아시 작은 칸을 끼워 넣음 (나머지 칸은 비율대로 조금 줄임)"""
+    """메인 차트 아래에 하이킨아시 칸을 끼워 넣고, 아래 칸들(하이킨아시·거래대금·RSI·MACD)은 작게 줄여 메인을 크게 함"""
     fig = ax.figure
     axes = list(fig.axes)
     if len(axes) < 4:
@@ -94,16 +95,17 @@ def add_ha(ax, cs, n):
     pos = [a.get_position() for a in axes[:4]]
     top = pos[0].y1
     bottom = pos[3].y0
-    gap = pos[0].y0 - pos[1].y1
-    s = 1 - HA_SHARE
-    free = (top - bottom) * (1 - s)
-    # 메인은 위쪽 고정·높이만 줄이고, 나머지 칸은 아래 기준으로 비율대로 줄임
-    axes[0].set_position([pos[0].x0, top - pos[0].height * s, pos[0].width, pos[0].height * s])
-    for a, p in zip(axes[1:4], pos[1:4]):
-        a.set_position([p.x0, bottom + (p.y0 - bottom) * s, p.width, p.height * s])
-    v_top = bottom + (pos[1].y1 - bottom) * s
-    ha_h = free * 0.78
-    ha_ax = fig.add_axes([pos[0].x0, v_top + gap * s * 1.2, pos[0].width, ha_h], sharex=ax)
+    gap = SMALL_GAP
+    small = SMALL_H
+    main_h = (top - bottom) - 4 * small - 4 * gap
+    x0, w = pos[0].x0, pos[0].width
+    axes[0].set_position([x0, top - main_h, w, main_h])
+    y = top - main_h
+    ha_ax = fig.add_axes([x0, y - gap - small, w, small], sharex=ax)
+    y = y - gap - small
+    for a in axes[1:4]:
+        y = y - gap - small
+        a.set_position([x0, y, w, small])
     ha = heikin(cs)[-n:]
     up, down = "#26a69a", "#ef5350"
     for i, (o, h, l, c) in enumerate(ha):
