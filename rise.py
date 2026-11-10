@@ -6,6 +6,7 @@ OKX 선물 전일대비 알림 (밑에서 잡기)
 - 한 번에 튀는 코인도, 15분씩 야금야금 늘어나는 코인도 1시간 합계로 같이 잡음
 - 같은 코인은 같은 방향으로 하루 한 번만 알림
 - 알림이 온 뒤 1시간이 지나면 알림 방향으로 +1% 이상 갔는지 기록해서 성적을 알림에 붙임
+- 매일 밤 9시(한국시간) 이후 첫 확인 때 성적표(막대 그림)를 같은 방에 한 번 올림
 - cross_alert.py의 차트·텔레그램 전송을 그대로 가져다 씀 (cross_alert.py는 안 바꿈)
 - 방 번호 찾기는 volt.py --find 를 쓰면 됨 / 차트 확인용 테스트: python rise.py --test
 """
@@ -31,6 +32,7 @@ VOL_RATIO = 1.5         # 최근 1시간 거래대금이 평소 1시간의 몇 �
 MIN_HOUR_USDT = 200000  # 최근 1시간 거래대금 최소 (USDT, 약 3억원)
 BASE_MAX_MIN = 240      # 평소 = 직전 최대 몇 분(1분봉 개수)의 평균
 WIN_PCT = 0.01          # 알림 1시간 뒤 알림 방향으로 이만큼 가면 승
+REPORT_HOUR = 21        # 매일 이 시각(한국시간) 이후 첫 확인 때 성적표를 방에 올림
 COOLDOWN_MIN = 1440     # 같은 코인·같은 방향은 이 시간(분) 안에 다시 알리지 않음
 MAX_PER_SCAN = 6        # 한 번에 보내는 최대 개수
 LOOP_SECONDS = 540      # 한 번 켜지면 이 시간(초) 동안 계속 확인 (--loop 일 때)
@@ -123,6 +125,55 @@ def make_chart(inst, c1m):
     return buf
 
 
+def make_report_chart(state):
+    """성적표 막대 그림: 상승/하락 알림이 1시간 뒤 이긴 비율"""
+    labels, vals, texts, colors = [], [], [], []
+    for d, name in (("up", "상승 알림"), ("down", "하락 알림")):
+        n, w = state["stats"][d]
+        labels.append(name)
+        vals.append(w / n * 100 if n else 0)
+        texts.append(f"{w / n * 100:.0f}%  ({w}/{n}번)" if n else "데이터 없음")
+        colors.append("#d62728" if d == "up" else "#1f77b4")
+    fig, ax = plt.subplots(figsize=(8, 3.2))
+    ax.barh(labels, vals, color=colors)
+    for i, (v, t) in enumerate(zip(vals, texts)):
+        ax.text(min(v, 100) + 1, i, t, va="center", fontsize=14)
+    ax.set_xlim(0, 135)
+    ax.set_xticks([0, 20, 40, 60, 80, 100])
+    ax.invert_yaxis()
+    ax.set_title(f"전일대비 알림 성적 (알림 1시간 뒤 {WIN_PCT * 100:.0f}%↑ 비율)", fontsize=15)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=80)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def report_caption(state):
+    return "\n".join([
+        "📊 전일대비 알림 성적표",
+        stat_line(state, "up"),
+        stat_line(state, "down"),
+        f"{datetime.now(ca.KST):%Y-%m-%d %H:%M}",
+    ])
+
+
+def maybe_report(state):
+    """하루 한 번(밤 9시 이후 첫 확인) 성적표를 방에 올림. 쌓인 기록이 없으면 건너뜀"""
+    now = datetime.now(ca.KST)
+    today = f"{now:%Y-%m-%d}"
+    if now.hour < REPORT_HOUR or state.get("last_report") == today:
+        return
+    if state["stats"]["up"][0] + state["stats"]["down"][0] == 0:
+        return
+    try:
+        ca.send_telegram(make_report_chart(state), report_caption(state))
+        state["last_report"] = today
+    except Exception as e:
+        print(f"[오류] 성적표 전송 실패: {e}")
+
+
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -201,6 +252,7 @@ def scan(state):
         except Exception as e:
             print(f"[오류] {inst} 전송 실패: {e}")
     print(f"{datetime.now(ca.KST):%H:%M:%S} 스캔 완료: 전일대비 후보 확인, 걸린 코인 {len(hits)}개, 보냄 {sent}개")
+    maybe_report(state)
 
 
 def send_test():
@@ -209,7 +261,9 @@ def send_test():
     c1m = ca.get_candles(inst, "1m")
     m = measure(c1m)
     chg = tickers.get(inst, (0.0, 0))[0]
-    ca.send_telegram(make_chart(inst, c1m), "[테스트] 실제 알림이 아닙니다\n" + make_caption(inst, chg, m, load_state()))
+    state = load_state()
+    ca.send_telegram(make_chart(inst, c1m), "[테스트] 실제 알림이 아닙니다\n" + make_caption(inst, chg, m, state))
+    ca.send_telegram(make_report_chart(state), "[테스트] 실제 성적표가 아닙니다\n" + report_caption(state))
 
 
 def main():
