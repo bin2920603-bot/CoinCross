@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import cross_alert as ca
+import zones            # 지지·저항 박스, 추세선, 과매도/과매수, 일목 구름, 하이킨아시 (zones.py)
 
 # ----- 설정값 -----
 TOP_N = 200
@@ -187,6 +188,10 @@ def make_chart(inst, cs, a, name):
     fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  일봉 {name} 근처 · 선 {side} {abs(g['gap']) * 100:.2f}% · 선 {'↑' if g['slope'] > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
     fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
+    try:
+        zones.overlay(ax, cs, n)
+    except Exception as e:
+        print(f"[박스 오류] {inst}: {e}")
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
