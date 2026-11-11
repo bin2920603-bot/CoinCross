@@ -7,7 +7,6 @@ OKX 선물(USDT-SWAP) EMA 교차 알림
 - 내 PC에서 계속 돌리려면: python cross_alert.py --loop  (60초마다 반복)
 - 차트/전송 확인용 [테스트] 사진 보내기: python cross_alert.py --test
 """
-
 import io
 import json
 import math
@@ -51,6 +50,12 @@ TREND_TOL = 0.03         # 꼬리가 선을 넘어도 봐주는 여유 (차트 �
 TREND_BAD = 1            # 선을 넘은 봉이 이 개수 이하면 인정
 TREND_MIN_GAP = 8        # 선을 긋는 두 점 사이 최소 봉 수
 TREND_COLOR = "#FFC107"  # 추세선 색 (노란색)
+# 새 모양 (거래대금30·전체 일봉과 같은 표시 — 크로스알림 4칸 카드에만 적용)
+ZPIVOT = 5               # 지지·저항 박스: 앞뒤 5봉보다 높(낮)으면 고점(저점)
+ZONE_PCT = 0.015         # 가격이 이 비율 안에 모이면 같은 박스로 묶음
+SHIFT = 26               # 일목 구름이 앞으로 나가는 봉 수
+RSI_LOW = 30             # RSI 이 값 이하면 과매도 ▲
+RSI_HIGH = 70            # RSI 이 값 이상이면 과매수 ▼
 # 차트 4개 (왼쪽 위 → 오른쪽 아래 순서). 마지막 15분봉이 신호 기준이라 진입·손절·익절 선이 여기에만 그려짐
 CHART_FRAMES = [
     ("일봉", "1D", "%m-%d"),
@@ -334,10 +339,124 @@ def draw_day_lines(ax, candles, n):
                     arrowprops=dict(arrowstyle="-", color=grey, linewidth=0.7, shrinkA=0, shrinkB=0))
 
 
+# ----- 새 모양: 지지·저항 박스, 일목 구름, 하이킨아시, 과매도/과매수 -----
+def make_zones(pts, price, above):
+    """비슷한 가격의 고/저점을 묶어 박스로 만듦. 현재가 위(저항)/아래(지지) 가까운 2개만"""
+    groups = []
+    for _, p in sorted(pts, key=lambda t: t[1]):
+        if groups and p <= groups[-1][0] * (1 + ZONE_PCT):
+            groups[-1][1].append(p)
+            groups[-1][0] = p
+        else:
+            groups.append([p, [p]])
+    zs = [(min(g[1]), max(g[1])) for g in groups]
+    if above:
+        zs = [z for z in zs if z[0] > price]
+        zs.sort(key=lambda z: z[0])
+    else:
+        zs = [z for z in zs if z[1] < price]
+        zs.sort(key=lambda z: -z[1])
+    return zs[:2]
+
+
+def mid_hl(cs, i, n):
+    """i번째 봉까지 n봉의 (최고가+최저가)/2"""
+    w = cs[max(0, i - n + 1):i + 1]
+    return (max(c["high"] for c in w) + min(c["low"] for c in w)) / 2
+
+
+def draw_cloud(ax, cs, n):
+    """일목 구름: 선행스팬A=(전환선9+기준선26)/2, 선행스팬B=52봉 중간값. 26봉 앞으로 밀어서 그림.
+    파랑 구름 = A가 위(상승 구름) / 주황 구름 = B가 위(하락 구름)"""
+    total = len(cs)
+    first = total - n
+    xs, a_vals, b_vals = [], [], []
+    for j in range(n + SHIFT):
+        src = first + j - SHIFT
+        if src < 51 or src > total - 1:
+            continue
+        a_vals.append((mid_hl(cs, src, 9) + mid_hl(cs, src, 26)) / 2)
+        b_vals.append(mid_hl(cs, src, 52))
+        xs.append(j)
+    if len(xs) < 2:
+        return
+    ax.fill_between(xs, a_vals, b_vals, where=[a >= b for a, b in zip(a_vals, b_vals)],
+                    color="#42a5f5", alpha=0.16, linewidth=0, interpolate=True, zorder=0)
+    ax.fill_between(xs, a_vals, b_vals, where=[a < b for a, b in zip(a_vals, b_vals)],
+                    color="#ffa726", alpha=0.18, linewidth=0, interpolate=True, zorder=0)
+
+
+def heikin(cs):
+    """하이킨아시 캔들: 종가=(시+고+저+종)/4, 시가=앞 하이킨아시 봉의 (시+종)/2"""
+    out = []
+    for i, c in enumerate(cs):
+        hc = (c["open"] + c["high"] + c["low"] + c["close"]) / 4
+        ho = (c["open"] + c["close"]) / 2 if i == 0 else (out[-1][0] + out[-1][3]) / 2
+        out.append((ho, max(c["high"], ho, hc), min(c["low"], ho, hc), hc))
+    return out
+
+
+def draw_ha(ax_ha, candles, n, up_color, down_color):
+    """가격 차트 바로 아래 작은 칸에 하이킨아시 캔들을 그림"""
+    for i, (o, h, l, c) in enumerate(heikin(candles)[-n:]):
+        color = up_color if c >= o else down_color
+        ax_ha.vlines(i, l, h, color=color, linewidth=0.9)
+        ax_ha.bar(i, abs(c - o) or (h - l) * 0.01, bottom=min(o, c), color=color, width=0.6)
+
+
+def draw_look(ax, candles, n):
+    """가격 차트에 지지(초록)·저항(빨강) 박스, 일목 구름, 과매도▲/과매수▼, 정배열/역배열 글자를 얹음
+    (진입·손절·익절 선과 노란 추세선은 그대로)"""
+    view = candles[-n:]
+    price = view[-1]["close"]
+    y0, y1 = ax.get_ylim()
+    hi, lo = [], []
+    for i in range(ZPIVOT, len(view) - ZPIVOT):
+        w = view[i - ZPIVOT:i + ZPIVOT + 1]
+        if view[i]["high"] >= max(c["high"] for c in w):
+            hi.append((i, view[i]["high"]))
+        if view[i]["low"] <= min(c["low"] for c in w):
+            lo.append((i, view[i]["low"]))
+    for zl, zh in make_zones(lo, price, False):
+        ax.axhspan(zl * 0.997, zh * 1.003, color="#2e7d32", alpha=0.18, zorder=0)
+    for zl, zh in make_zones(hi, price, True):
+        ax.axhspan(zl * 0.997, zh * 1.003, color="#c62828", alpha=0.18, zorder=0)
+    closes = [c["close"] for c in candles]
+    rs = rsi(closes, 14)[-n:]
+    gap = (y1 - y0) * 0.025
+    lx, ly, hx, hy = [], [], [], []
+    for i, c in enumerate(view):
+        if rs[i] != rs[i]:          # nan
+            continue
+        if rs[i] <= RSI_LOW:
+            lx.append(i)
+            ly.append(c["low"] - gap)
+        elif rs[i] >= RSI_HIGH:
+            hx.append(i)
+            hy.append(c["high"] + gap)
+    if lx:
+        ax.scatter(lx, ly, marker="^", s=45, color="#1565c0", zorder=5)
+    if hx:
+        ax.scatter(hx, hy, marker="v", s=45, color="#d50000", zorder=5)
+    draw_cloud(ax, candles, n)
+    e20, e50, e120 = ema(closes, 20)[-1], ema(closes, 50)[-1], ema(closes, 120)[-1]
+    if e20 > e50 > e120:
+        txt, col = "정배열 ▲", "#2e7d32"
+    elif e20 < e50 < e120:
+        txt, col = "역배열 ▼", "#c62828"
+    else:
+        txt, col = "혼조 ─", "#555555"
+    ax.text(0.99, 0.97, txt, transform=ax.transAxes, ha="right", va="top", fontsize=14,
+            fontweight="bold", color=col)
+    ax.set_ylim(y0, y1)                       # 박스·구름 때문에 차트 크기가 안 바뀌게 고정
+    ax.set_xlim(-1, n + SHIFT + 2)            # 구름이 앞으로 나가는 만큼 오른쪽 여백
+
+
 # ----- 차트 -----
-def draw_frame(fig, spec, label, candles, date_fmt, info=None):
+def draw_frame(fig, spec, label, candles, date_fmt, info=None, look=False):
     """차트 1개(가격+EMA / RSI / MACD / 거래대금 4칸)를 spec 자리에 그림.
-    info에 진입가가 있으면 진입·손절·익절 선도 같이 그림 (15분봉 칸에서만 사용)"""
+    info에 진입가가 있으면 진입·손절·익절 선도 같이 그림 (15분봉 칸에서만 사용)
+    look=True면 새 모양(박스·구름·▲▼·하이킨아시 칸)을 얹음 (크로스알림 4칸 카드만 True, 나머지는 예전 그대로)"""
     n = min(CHART_BARS, len(candles))
     cs = candles[-n:]
     closes_all = [c["close"] for c in candles]
@@ -347,12 +466,22 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
     x = list(range(n))
     up_color, down_color = "#26a69a", "#ef5350"
 
-    gs = spec.subgridspec(4, 1, height_ratios=[4, 1.3, 1.3, 1.3], hspace=0.12)
-    ax1 = fig.add_subplot(gs[0])
-    ax_rsi = fig.add_subplot(gs[1], sharex=ax1)
-    ax_macd = fig.add_subplot(gs[2], sharex=ax1)
-    ax2 = fig.add_subplot(gs[3], sharex=ax1)
-    for a in (ax1, ax_rsi, ax_macd):
+    ax_ha = None
+    if look:
+        gs = spec.subgridspec(5, 1, height_ratios=[5.2, 1.0, 1.0, 1.0, 1.0], hspace=0.12)
+        ax1 = fig.add_subplot(gs[0])
+        ax_ha = fig.add_subplot(gs[1], sharex=ax1)       # 하이킨아시 작은 칸
+        ax_rsi = fig.add_subplot(gs[2], sharex=ax1)
+        ax_macd = fig.add_subplot(gs[3], sharex=ax1)
+        ax2 = fig.add_subplot(gs[4], sharex=ax1)
+    else:
+        gs = spec.subgridspec(4, 1, height_ratios=[4, 1.3, 1.3, 1.3], hspace=0.12)
+        ax1 = fig.add_subplot(gs[0])
+        ax_rsi = fig.add_subplot(gs[1], sharex=ax1)
+        ax_macd = fig.add_subplot(gs[2], sharex=ax1)
+        ax2 = fig.add_subplot(gs[3], sharex=ax1)
+    all_axes = [ax1, ax_rsi, ax_macd, ax2] + ([ax_ha] if ax_ha is not None else [])
+    for a in [ax1, ax_rsi, ax_macd] + ([ax_ha] if ax_ha is not None else []):
         plt.setp(a.get_xticklabels(), visible=False)
 
     # 가격 (캔들)
@@ -360,278 +489,4 @@ def draw_frame(fig, spec, label, candles, date_fmt, info=None):
         color = up_color if c["close"] >= c["open"] else down_color
         ax1.vlines(i, c["low"], c["high"], color=color, linewidth=1)
         body_low = min(c["open"], c["close"])
-        body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01
-        ax1.bar(i, body_h, bottom=body_low, color=color, width=0.6)
-
-    ax1.plot(x, e7, label="EMA7", color="#E91E63", linewidth=1.6)    # 진한 핑크
-    ax1.plot(x, e20, label="EMA20", color="#F9A825", linewidth=1.6)  # 진한 노랑
-    ax1.plot(x, e50, label="EMA50", color="#43A047", linewidth=1.6)  # 초록
-
-    # 진입가 / 손절가 / 익절가 선 (익절은 EMA50 초록과 헷갈리지 않게 더 짙은 초록 점선)
-    if info and "entry" in info:
-        for key, name, color in [("tp", "익절", "#1B5E20"), ("entry", "진입", "#212121"), ("sl", "손절", "#c62828")]:
-            v = info[key]
-            ax1.axhline(v, color=color, linestyle="--", linewidth=1.3)
-            # 글자는 차트 오른쪽 바깥에 (x는 차트 비율, y는 가격)
-            ax1.text(1.005, v, f"{name} {fmt_price(v, info['entry'])}", color=color, va="center", ha="left",
-                     fontsize=10, fontweight="bold", transform=ax1.get_yaxis_transform(), clip_on=False)
-
-    # 노란 추세선 (선이 멀리 뻗어도 차트 가격 범위는 그대로 유지)
-    y_lo, y_hi = ax1.get_ylim()
-    draw_trendlines(ax1, cs)
-    ax1.set_ylim(y_lo, y_hi)
-    ax1.set_xlim(-1, n + TREND_EXT)
-    draw_day_lines(ax1, candles, n)
-    # 매일 한국시간 01시 = 일봉이 마감되는 자리에 세로 점선 + 작은 글자 (1시간봉·15분봉 칸에만)
-    if label in ("1시간봉", "15분봉"):
-        for i, c in enumerate(cs):
-            t = datetime.fromtimestamp(c["ts"] / 1000, KST)
-            if t.hour == 1 and t.minute == 0 and i > 0:
-                for axx in (ax1, ax_rsi, ax_macd, ax2):
-                    axx.axvline(i - 0.5, color="#90a4ae", linewidth=1.2, linestyle=(0, (2, 2)), alpha=0.9)
-                if i >= 14:      # 왼쪽 끝은 칸 제목과 겹쳐서 글자는 생략
-                    ax1.text(i - 0.5, 1.0, "01시 마감", transform=ax1.get_xaxis_transform(), fontsize=9,
-                             color="#607d8b", ha="center", va="bottom", fontweight="bold")
-
-    ax1.set_title(label, fontsize=18, fontweight="bold", loc="left")
-    ax1.legend(loc="upper left", fontsize=8)
-    ax1.grid(alpha=0.3)
-    ax1.set_ylabel("가격")
-
-    # RSI (6, 12, 24)
-    for period, color in [(6, "#7B1FA2"), (12, "#1976D2"), (24, "#FF6F00")]:
-        ax_rsi.plot(x, rsi(closes_all, period)[-n:], label=f"RSI{period}", color=color, linewidth=1.2)
-    for level in (30, 70):
-        ax_rsi.axhline(level, color="#9e9e9e", linestyle="--", linewidth=0.8)
-    ax_rsi.set_ylim(0, 100)
-    ax_rsi.set_yticks([30, 50, 70])
-    ax_rsi.set_ylabel("RSI")
-    ax_rsi.legend(loc="upper left", fontsize=7, ncol=3)
-    ax_rsi.grid(alpha=0.3)
-
-    # MACD (12, 26, 9)
-    m_line, m_sig, m_hist = (s[-n:] for s in macd(closes_all))
-    ax_macd.bar(x, m_hist, color=[up_color if h >= 0 else down_color for h in m_hist], width=0.6, alpha=0.6)
-    ax_macd.plot(x, m_line, label="MACD", color="#1976D2", linewidth=1.2)
-    ax_macd.plot(x, m_sig, label="Signal", color="#FF6F00", linewidth=1.2)
-    ax_macd.axhline(0, color="#9e9e9e", linewidth=0.8)
-    ax_macd.set_ylabel("MACD")
-    ax_macd.legend(loc="upper left", fontsize=7, ncol=2)
-    ax_macd.grid(alpha=0.3)
-
-    # 거래대금 막대
-    vol_colors = [up_color if c["close"] >= c["open"] else down_color for c in cs]
-    ax2.bar(x, [c["quote_vol"] for c in cs], color=vol_colors, width=0.6)
-    ax2.grid(alpha=0.3)
-    ax2.set_ylabel("거래대금")
-    ax2.yaxis.set_major_formatter(FuncFormatter(fmt_vol))
-
-    # x축 시간 (한국시간)
-    step = max(1, n // 5)
-    ticks = x[::step]
-    ax2.set_xticks(ticks)
-    ax2.set_xticklabels(
-        [datetime.fromtimestamp(cs[i]["ts"] / 1000, KST).strftime(date_fmt) for i in ticks],
-        fontsize=8,
-    )
-
-
-def make_chart(inst_id, candles, signal, info):
-    """일봉·4시간봉·1시간봉·15분봉 차트 4개를 한 장(2x2)으로 만듦"""
-    fig = plt.figure(figsize=(20, 20))
-    outer = fig.add_gridspec(2, 2, wspace=0.22, hspace=0.14)
-
-    for idx, (label, bar, date_fmt) in enumerate(CHART_FRAMES):
-        if bar == BAR:
-            frame_candles, frame_info = candles, info   # 신호 기준 15분봉 (진입·손절·익절 선 포함)
-        else:
-            frame_candles, frame_info = get_candles(inst_id, bar), None
-            time.sleep(0.1)  # OKX 요청 제한 보호
-        draw_frame(fig, outer[idx // 2, idx % 2], label, frame_candles, date_fmt, frame_info)
-
-    # 제목: 코인 이름 + 롱진입/숏진입 크게
-    coin = inst_id.replace("-USDT-SWAP", "")
-    up_color, down_color = "#26a69a", "#ef5350"
-    if signal.endswith("준비"):
-        # 준비 알림은 노란색 (흰 배경에서도 잘 보이게 검은 테두리)
-        title = fig.suptitle(f"{coin}  {signal}", fontsize=34, fontweight="bold", color="#FFD600", y=0.985)
-        title.set_path_effects([patheffects.withStroke(linewidth=3, foreground="black")])
-    elif info.get("pass"):
-        fig.suptitle(f"{coin}  {signal}  (패스)", fontsize=34, fontweight="bold", color="#757575", y=0.985)
-    else:
-        title_color = up_color if signal == "롱진입" else down_color
-        fig.suptitle(f"{coin}  {signal}", fontsize=34, fontweight="bold", color=title_color, y=0.985)
-
-    # 오른쪽은 15분봉 가격선 글자(진입·손절·익절) 자리
-    fig.subplots_adjust(left=0.05, right=0.90, top=0.94, bottom=0.03)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=80)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-
-# ----- 텔레그램 -----
-def same_flow(inst_id, signal):
-    """일봉·4시간봉 큰 흐름이 둘 다 신호 방향과 같으면 True (끝난 봉 기준, 승률표와 같은 기준)
-    큰 흐름: 종가>EMA50 이고 EMA20>EMA50 이면 위(up), 반대면 아래(down)"""
-    want = "up" if signal.startswith("롱") else "down"
-    for bar in ("1D", "4H"):
-        cs = get_candles(inst_id, bar)[:-1]      # 맨 끝(아직 안 끝난 봉)은 뺌
-        if len(cs) < 60:
-            return False
-        closes = [c["close"] for c in cs]
-        e20, e50 = ema(closes, 20)[-1], ema(closes, 50)[-1]
-        if closes[-1] > e50 and e20 > e50:
-            trend = "up"
-        elif closes[-1] < e50 and e20 < e50:
-            trend = "down"
-        else:
-            trend = None
-        if trend != want:
-            return False
-    return True
-
-
-def send_telegram(photo, caption):
-    if not TOKEN or not CHAT_ID:
-        print("  (TOKEN/CHAT_ID가 비어 있어 텔레그램 전송은 건너뜀)")
-        return
-    r = session.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-        data={"chat_id": CHAT_ID, "caption": caption},
-        files={"photo": ("chart.png", photo, "image/png")},
-        timeout=30,
-    )
-    if not r.ok:
-        print(f"  [텔레그램 오류] {r.status_code} {r.text}")
-
-
-# ----- 보낸 알림 기록 (실행이 끝나도 기억하도록 파일에 저장) -----
-def load_state():
-    # 코인별로 마지막 알림을 보낸 봉의 시작 시각 → 같은 봉 중복 알림 방지
-    # 준비/진입을 따로 기록해서, 준비 알림 뒤 교차가 확정되면 진입 알림도 나가게 함
-    sent = {"진입": {}, "준비": {}}
-    try:
-        with open(STATE_FILE, encoding="utf-8") as f:
-            saved = json.load(f)
-        for kind in sent:
-            sent[kind].update(saved.get(kind, {}))
-    except (FileNotFoundError, ValueError):
-        pass
-    return sent
-
-
-def save_state(sent):
-    cutoff = time.time() * 1000 - STATE_KEEP_MS
-    pruned = {kind: {k: ts for k, ts in d.items() if ts >= cutoff} for kind, d in sent.items()}
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(pruned, f, ensure_ascii=False, indent=1)
-
-
-# ----- 텔레그램 글 -----
-def make_caption(inst_id, last, signal, info):
-    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-    # 텔레그램 캡션은 글자색을 못 바꿔서 노란 동그라미로 표시
-    head = f"🟡🟡 {signal} 🟡🟡" if signal.endswith("준비") else signal
-    lines = [head, inst_id]
-    if "entry" in info:
-        entry, sl, tp = info["entry"], info["sl"], info["tp"]
-        if info["pass"]:
-            lines[0] = f"⛔ 패스 · {signal}"
-        lines += [
-            f"진입가: {fmt_price(entry)}",
-            f"손절가: {fmt_price(sl, entry)} ({(sl - entry) / entry * 100:+.2f}%)",
-            f"익절가: {fmt_price(tp, entry)} ({(tp - entry) / entry * 100:+.2f}%)",
-        ]
-        if info["pass"]:
-            reason = ("손절가가 진입가 반대편" if info["risk_pct"] <= 0
-                      else f"손절거리 {info['risk_pct'] * 100:.2f}% > {MAX_RISK_PCT * 100:.0f}%")
-            lines.append(f"→ 패스 ({reason})")
-    else:
-        lines.append(f"가격: {fmt_price(last['close'])}")
-    lines += [f"거래대금: 평균의 {info['vol_ratio']:.1f}배", f"{now} (15분봉)"]
-    return "\n".join(lines)
-
-
-# ----- 한 번 훑기 -----
-def scan(sent):
-    try:
-        symbols = get_top_symbols()
-    except Exception as e:
-        print(f"[오류] 코인 목록 조회 실패: {e}")
-        return
-
-    hits = 0
-    for inst_id in symbols:
-        try:
-            candles = get_candles(inst_id)
-            signal, info = check_signal(candles)
-            kind = signal[-2:] if signal else None  # "진입" 또는 "준비"
-            if signal and sent[kind].get(inst_id) != candles[-1]["ts"]:
-                last = candles[-1]
-                if SKIP_SAME_FLOW and kind == "진입" and not info.get("pass"):
-                    try:
-                        skip = same_flow(inst_id, signal)
-                    except Exception as e:
-                        print(f"[오류] {inst_id} 큰 흐름 확인 실패(알림은 그대로 보냄): {e}")
-                        skip = False
-                    if skip:
-                        print(f"[건너뜀] {inst_id} {signal}: 일봉·4시간봉 큰 흐름이 같은 방향")
-                        sent[kind][inst_id] = last["ts"]
-                        continue
-                caption = make_caption(inst_id, last, signal, info)
-                print(f"[신호] {caption.replace(chr(10), ' | ')}")
-                send_telegram(make_chart(inst_id, candles, signal, info), caption)
-                sent[kind][inst_id] = last["ts"]
-                hits += 1
-        except Exception as e:
-            print(f"[오류] {inst_id}: {e}")
-        time.sleep(0.1)  # OKX 요청 제한 보호
-
-    print(f"{datetime.now(KST):%H:%M:%S} 스캔 완료: {len(symbols)}개 확인, 신호 {hits}개")
-
-
-def send_test(inst_id="BTC-USDT-SWAP"):
-    """조건과 상관없이 현재 차트를 [테스트] 사진으로 보냄 (차트/전송 확인용)"""
-    candles = get_candles(inst_id)
-    closes = [c["close"] for c in candles]
-    vols = [c["quote_vol"] for c in candles]
-    e7, e20, e50 = ema(closes, 7), ema(closes, 20), ema(closes, 50)
-    signal = "롱진입" if e7[-1] >= e50[-1] else "숏진입"  # 지금 EMA7이 EMA50 위면 롱, 아래면 숏 모양으로
-    avg_vol = sum(vols[-VOL_AVG_BARS - 1:-1]) / VOL_AVG_BARS
-    info = {"e7": e7, "e20": e20, "e50": e50, "vol_ratio": vols[-1] / avg_vol if avg_vol else 0}
-    info.update(trade_levels(candles, signal))
-    caption = "[테스트] 실제 신호가 아닙니다\n" + make_caption(inst_id, candles[-1], signal, info)
-    print(caption)
-    send_telegram(make_chart(inst_id, candles, signal, info), caption)
-
-
-def main():
-    setup_korean_font()
-    if not TOKEN or not CHAT_ID:
-        print("[알림] 환경변수 TELEGRAM_TOKEN, TELEGRAM_CHAT_ID가 없어 텔레그램 전송 없이 화면에만 표시합니다.")
-
-    if "--test" in sys.argv:
-        send_test()
-        return
-
-    sent = load_state()
-    if "--loop" not in sys.argv:
-        scan(sent)
-        save_state(sent)
-        return
-
-    print("감시 시작 (종료: Ctrl+C)")
-    while True:
-        started = time.time()
-        scan(sent)
-        save_state(sent)
-        time.sleep(max(0, SCAN_INTERVAL - (time.time() - started)))
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n종료합니다.")
+        body_h = abs(c["close"] - c["open"]) or (c["high"]
