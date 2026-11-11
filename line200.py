@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import cross_alert as ca
+import zones            # 지지·저항 박스, 추세선, 과매도/과매수, 일목 구름, 하이킨아시 (zones.py)
 
 # ----- 설정값 (며칠 써 보고 여기 숫자만 고치면 됨) -----
 TOP_N = 200            # 거래대금 상위 몇 개 코인을 볼지
@@ -186,4 +187,153 @@ def add_extras(ax, axv, axr, axm, candles, n):
         axv.bar(len(cs) - 1, pace, color="none", edgecolor="#222", linestyle="--", linewidth=1.2, width=0.7)
     if avg > 0:
         axv.axhline(avg, color="#555", linewidth=1.2)
-        axv.set_title(f"거래대금  20봉 평균(검은선)
+        axv.set_title(f"거래대금  20봉 평균(검은선)  ·  오늘 속도 평균의 {pace / avg:.1f}배", fontsize=12, loc="left")
+    ds = day_stats(candles)
+    if ds:
+        items = (("시가(=어제 종가)", ds["open"]), ("고가", ds["high"]), ("저가", ds["low"]), ("현재가(종가)", ds["price"]))
+        for label, val in items:
+            ax.axhline(val, color=grey, linewidth=1.4, linestyle="--", alpha=0.8)
+        y0, y1 = ax.get_ylim()
+        gap = (y1 - y0) * 0.085
+        pos = []
+        order = sorted(items, key=lambda t: -t[1])
+        for _, val in order:
+            pos.append(val if not pos else min(val, pos[-1] - gap))
+        for (label, val), y in zip(order, pos):
+            ax.annotate(f"{label}\n{val:.6g}", xy=(1.0, val), xytext=(1.015, y), xycoords=ax.get_yaxis_transform(),
+                        textcoords=ax.get_yaxis_transform(), fontsize=11, color="#607d8b", va="center", ha="left",
+                        fontweight="bold", annotation_clip=False,
+                        arrowprops=dict(arrowstyle="-", color=grey, linewidth=1, shrinkA=0, shrinkB=0))
+    marks = []
+    for i, c in enumerate(cs):
+        if BAR_H == 1 and datetime.fromtimestamp(c["ts"] / 1000, ca.KST).hour == 1 and i > 0:
+            marks.append(i)
+            for axx in (ax, axv, axr, axm):
+                axx.axvline(i - 0.5, color=grey, linewidth=1.4, linestyle=(0, (2, 2)), alpha=0.8)
+            ax.text(i - 0.5, 1.0, "01시 마감", transform=ax.get_xaxis_transform(), fontsize=12,
+                    color="#607d8b", ha="center", va="bottom", fontweight="bold")
+    axv.grid(alpha=0.3)
+    if len(marks) >= 2:
+        axm.set_xticks([i - 0.5 for i in marks])
+        axm.set_xticklabels([datetime.fromtimestamp(cs[i]["ts"] / 1000, ca.KST).strftime("%m-%d 01:00") for i in marks],
+                            fontsize=10, fontweight="bold", color="#607d8b")
+    else:
+        step = max(1, len(cs) // 8)
+        axm.set_xticks(x[::step])
+        axm.set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%m-%d" if BAR_H == 24 else "%m-%d %H:%M") for c in cs[::step]], fontsize=9)
+
+
+def make_chart(inst, candles, a):
+    fig, (ax, axv, axr, axm) = plt.subplots(4, 1, figsize=(14, 12), sharex=True, gridspec_kw={"height_ratios": [4, 1, 1, 1]})
+    draw_panel(ax, candles, a["e200"], a["line"], 130)
+    add_extras(ax, axv, axr, axm, candles, 130)
+    fig.suptitle(make_title(inst, a), fontsize=20, fontweight="bold", y=0.985)
+    fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
+    try:
+        zones.overlay(ax, candles, 130)
+    except Exception as e:
+        print(f"[박스 오류] {inst}: {e}")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=80)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+HINT = "일봉 200선 근처"      # 1시간봉 승률표는 일봉에 안 맞아서 뺌
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_state(state):
+    cutoff = time.time() * 1000 - 48 * 3600 * 1000
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in state.items() if v >= cutoff}, f)
+
+
+def scan(state):
+    try:
+        symbols = ca.get_top_symbols(TOP_N)
+    except Exception as e:
+        print(f"[오류] 코인 목록 조회 실패: {e}")
+        return
+    hits = []
+    for inst in symbols:
+        try:
+            if time.time() * 1000 - state.get(inst, 0) < COOLDOWN_H * 3600000:
+                continue
+            quick = analyze(ca.get_candles(inst, BAR), 150)       # 200봉짜리 어림 계산
+            if quick is None or abs(quick["gap"]) > PRE_NEAR:
+                continue
+            full = merge_recent(get_history(inst, HIST_BARS), ca.get_candles(inst, BAR))
+            a = analyze(full)                                      # 정확한 계산
+            if is_near(a):
+                hits.append((abs(a["gap"]), inst, a, full))
+        except Exception as e:
+            print(f"[오류] {inst}: {e}")
+        time.sleep(0.1)
+    hits.sort(key=lambda x: x[0])
+    sent = 0
+    for _, inst, a, full in hits[:MAX_PER_SCAN]:
+        try:
+            caption = make_caption(inst, a)
+            print("[200선]", caption.replace("\n", " | "))
+            ca.send_telegram(make_chart(inst, full, a), caption if SHOW_CAPTION else HINT)
+            state[inst] = int(time.time() * 1000)
+            sent += 1
+        except Exception as e:
+            print(f"[오류] {inst} 전송 실패: {e}")
+    print(f"{datetime.now(ca.KST):%H:%M:%S} 스캔 완료: {len(symbols)}개 확인, 근처 코인 {len(hits)}개, 보냄 {sent}개")
+
+
+def find_chat():
+    """봇이 아는 방(그룹)을 찾아서 번호를 보여주고, 그 방에도 번호를 직접 말해 줌"""
+    r = ca.session.get(f"https://api.telegram.org/bot{ca.TOKEN}/getUpdates", timeout=20).json()
+    seen = {}
+    for u in r.get("result", []):
+        for key in ("message", "channel_post", "my_chat_member"):
+            chat = (u.get(key) or {}).get("chat")
+            if chat and chat.get("type") in ("group", "supergroup", "channel"):
+                seen[chat["id"]] = chat.get("title", "")
+    print("봇이 아는 방:", seen)
+    for cid, title in seen.items():
+        print(f"[찾은 방] {cid} {title}")
+        try:
+            ca.session.post(f"https://api.telegram.org/bot{ca.TOKEN}/sendMessage",
+                            data={"chat_id": cid, "text": f"이 방 번호: {cid}"}, timeout=20)
+        except Exception as e:
+            print("[오류] 방에 번호 보내기 실패:", e)
+    if not seen:
+        print("[못 찾음] 방에서 /start@봇이름 을 보낸 뒤 24시간 안에 다시 실행하세요")
+
+
+def send_test():
+    inst = ca.get_top_symbols(1)[0]
+    full = merge_recent(get_history(inst, HIST_BARS), ca.get_candles(inst, BAR))
+    a = analyze(full)
+    ca.send_telegram(make_chart(inst, full, a), ("[테스트] 실제 알림이 아닙니다\n" + make_caption(inst, a)) if SHOW_CAPTION else "[테스트]")
+
+
+def main():
+    ca.setup_korean_font()
+    if "--find" in sys.argv:
+        find_chat()
+        return
+    if not ca.TOKEN or not CHAT:
+        print("[알림] TELEGRAM_TOKEN 또는 LINE200_CHAT이 비어 있어 텔레그램 전송 없이 화면에만 표시합니다.")
+    if "--test" in sys.argv:
+        send_test()
+        return
+    state = load_state()
+    scan(state)
+    save_state(state)
+
+
+if __name__ == "__main__":
+    main()
