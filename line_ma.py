@@ -41,7 +41,7 @@ def get_candles(inst, bar=BAR):
     out = []
     for c in r.json()["data"]:
         out.append({"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]),
-                    "close": float(c[4]), "vol": float(c[6])})
+                    "close": float(c[4]), "vol": float(c[6]), "qv": float(c[7])})
     out.sort(key=lambda c: c["ts"])
     return out
 
@@ -118,20 +118,20 @@ def make_chart(inst, cs, a, name):
         ax.vlines(i, c["low"], c["high"], color=col, linewidth=1)
         ax.bar(i, abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01,
                bottom=min(c["open"], c["close"]), color=col, width=0.6)
-        axv.bar(i, c["vol"], color=col, width=0.7, alpha=0.8)
+        axv.bar(i, c["qv"], color=col, width=0.7, alpha=0.8)
     # 거래량: 지금 진행 중인 봉은 1시간 속도로 환산해서 점선 막대로 함께 표시
-    done = [c["vol"] for c in cs[-21:-1]]
+    done = [c["qv"] for c in cs[-21:-1]]
     avg = sum(done) / len(done) if done else 0
     el = (time.time() * 1000 - cs[-1]["ts"]) / (3600000 * BAR_H)
     el = min(1.0, max(el, 0.1))
-    pace = cs[-1]["vol"] / el
+    pace = cs[-1]["qv"] / el
     last_i = len(v) - 1
-    if pace > cs[-1]["vol"]:
+    if pace > cs[-1]["qv"]:
         axv.bar(last_i, pace, color="none", edgecolor="#222", linestyle="--", linewidth=1.2, width=0.7)
     if avg > 0:
         axv.axhline(avg, color="#555", linewidth=1.2)
         ratio = pace / avg
-        axv.set_title(f"거래량  20봉 평균(검은선)  ·  오늘 속도 평균의 {ratio:.1f}배", fontsize=12, loc="left")
+        axv.set_title(f"거래대금  20봉 평균(검은선)  ·  오늘 속도 평균의 {ratio:.1f}배", fontsize=12, loc="left")
     for ln, color in LINES:
         s = a["series"][ln][-n:]
         pts = [(i, y) for i, y in zip(x, s) if y]
