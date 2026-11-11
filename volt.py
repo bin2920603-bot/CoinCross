@@ -35,6 +35,89 @@ CHAT = os.environ.get("VOLT_CHAT", "")
 ca.CHAT_ID = CHAT      # cross_alert의 텔레그램 전송이 이 방으로 가게 함
 
 
+# ---- 변동성 차트(1분봉·15분봉)에도 지지·저항 박스 + 과매도/과매수 표시를 얹음 (다른 알림 차트는 안 건드림) ----
+Z_PIVOT = 5            # 앞뒤 5봉보다 높/낮으면 고점/저점
+Z_NEAR = 0.06          # 차트 가격 높이의 6% 안에 모이는 고/저점은 같은 박스
+Z_RSI_LOW, Z_RSI_HIGH = 30, 70   # 이 값 이하 파란 ▲(과매도) / 이상 빨간 ▼(과매수)
+
+
+def _pivots(cs):
+    hi, lo = [], []
+    for i in range(Z_PIVOT, len(cs) - Z_PIVOT):
+        w = cs[i - Z_PIVOT:i + Z_PIVOT + 1]
+        if cs[i]["high"] >= max(c["high"] for c in w):
+            hi.append(cs[i]["high"])
+        if cs[i]["low"] <= min(c["low"] for c in w):
+            lo.append(cs[i]["low"])
+    return hi, lo
+
+
+def _zones(pts, price, above, tol):
+    """비슷한 가격의 고/저점을 묶어 박스로 만듦. 현재가 위(저항)/아래(지지) 가까운 2개만"""
+    groups = []
+    for p in sorted(pts):
+        if groups and p <= groups[-1][0] + tol:
+            groups[-1][1].append(p)
+            groups[-1][0] = p
+        else:
+            groups.append([p, [p]])
+    zs = [(min(g[1]), max(g[1])) for g in groups]
+    if above:
+        zs = sorted([z for z in zs if z[0] > price], key=lambda z: z[0])
+    else:
+        zs = sorted([z for z in zs if z[1] < price], key=lambda z: -z[1])
+    return zs[:2]
+
+
+def _rsi14(closes):
+    out, up, dn = [None], 0.0, 0.0
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        up = (up * 13 + max(d, 0)) / 14
+        dn = (dn * 13 + max(-d, 0)) / 14
+        out.append(100 - 100 / (1 + up / dn) if dn > 0 else 100.0)
+    return out
+
+
+def _extras(ax, cs):
+    price = cs[-1]["close"]
+    top, bot = max(c["high"] for c in cs), min(c["low"] for c in cs)
+    rng = top - bot
+    if rng <= 0:
+        return
+    hi, lo = _pivots(cs)
+    pad = rng * 0.012
+    for zl, zh in _zones(lo, price, False, rng * Z_NEAR):    # 지지: 초록 박스
+        ax.axhspan(zl - pad, zh + pad, color="#2e7d32", alpha=0.18, zorder=0)
+    for zl, zh in _zones(hi, price, True, rng * Z_NEAR):     # 저항: 빨강 박스
+        ax.axhspan(zl - pad, zh + pad, color="#c62828", alpha=0.18, zorder=0)
+    y0, y1 = ax.get_ylim()
+    gap = (y1 - y0) * 0.025
+    rs = _rsi14([c["close"] for c in cs])
+    for i, c in enumerate(cs):
+        if rs[i] is None:
+            continue
+        if rs[i] <= Z_RSI_LOW:
+            ax.scatter(i, c["low"] - gap, marker="^", s=45, color="#1565c0", zorder=5)
+        elif rs[i] >= Z_RSI_HIGH:
+            ax.scatter(i, c["high"] + gap, marker="v", s=45, color="#d50000", zorder=5)
+
+
+_orig_trend = ca.draw_trendlines
+
+
+def _trend_plus(ax, cs):
+    """원래 노란 추세선을 그린 뒤, 지지·저항 박스와 ▲▼를 얹음 (실패해도 차트는 그대로)"""
+    _orig_trend(ax, cs)
+    try:
+        _extras(ax, cs)
+    except Exception as e:
+        print("[박스 오류]", e)
+
+
+ca.draw_trendlines = _trend_plus
+
+
 def measure(candles):
     """1분봉으로 변동성을 잼. 모자라면 None"""
     if len(candles) < 136:
