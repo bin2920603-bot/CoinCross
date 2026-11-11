@@ -7,7 +7,7 @@ OKX 선물 전일대비 알림 (밑에서 잡기)
 - 같은 코인은 같은 방향으로 하루 한 번만 알림
 - 알림이 온 뒤 1시간이 지나면 알림 방향으로 +1% 이상 갔는지 기록해서 성적을 알림에 붙임
 - 매일 밤 9시(한국시간) 이후 첫 확인 때 성적표(막대 그림)를 같은 방에 한 번 올림
-- cross_alert.py의 차트·텔레그램 전송을 그대로 가져다 씀 (cross_alert.py는 안 바꿈)
+- cross_alert.py의 차트·텔레그램 전송을 그대로 가져다 씀 (차트는 새 모양: 박스·구름·▲▼·하이킨아시)
 - 방 번호 찾기는 volt.py --find 를 쓰면 됨 / 차트 확인용 테스트: python rise.py --test
 """
 import io
@@ -114,8 +114,8 @@ def make_chart(inst, c1m):
     c15 = ca.get_candles(inst, "15m")
     fig = plt.figure(figsize=(22, 10))
     outer = fig.add_gridspec(1, 2, wspace=0.12)
-    ca.draw_frame(fig, outer[0, 0], "1분봉", c1m, "%H:%M")
-    ca.draw_frame(fig, outer[0, 1], "15분봉", c15, "%m-%d %H:%M")
+    ca.draw_frame(fig, outer[0, 0], "1분봉", c1m, "%H:%M", look=True)
+    ca.draw_frame(fig, outer[0, 1], "15분봉", c15, "%m-%d %H:%M", look=True)
     fig.suptitle(inst.replace("-USDT-SWAP", "") + "  전일대비", fontsize=30, fontweight="bold", y=0.99)
     fig.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.05)
     buf = io.BytesIO()
