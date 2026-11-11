@@ -136,8 +136,12 @@ def trend_line(pts, n, price, y0, y1):
     return None
 
 
-def overlay(ax, cs):
-    n = min(SHOW_BARS, len(cs))
+def overlay(ax, cs, bars=None):
+    """bars: 차트에 보이는 봉 개수 (안 주면 SHOW_BARS). 차트 맨 오른쪽 봉이 cs의 마지막 봉이어야 함"""
+    if getattr(ax, "_zones_done", False):                     # 한 차트에 두 번 얹지 않음
+        return
+    ax._zones_done = True
+    n = min(bars or SHOW_BARS, len(cs))
     view = cs[-n:]
     price = view[-1]["close"]
     hi, lo = pivots(view)
