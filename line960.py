@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import cross_alert as ca
+import zones            # 지지·저항 박스, 추세선, 과매도/과매수, 일목 구름, 하이킨아시 (zones.py)
 
 # ----- 설정값 -----
 PERIOD = 960
@@ -224,6 +225,12 @@ def make_chart(inst, entry, recent):
     fig.suptitle(f"{inst.replace('-USDT-SWAP', '')}  1시간봉 EMA960 근처 · 선 {'위' if gap >= 0 else '아래'} {abs(gap) * 100:.2f}% · 선 {'↑' if slope > 0 else '↓'}",
                  fontsize=20, fontweight="bold", y=0.985)
     fig.subplots_adjust(left=0.07, right=0.86, top=0.945, bottom=0.045, hspace=0.3)
+    try:
+        upto = [c for c in recent if c["ts"] <= bars[-1]["ts"]]       # 차트 맨 오른쪽 봉까지의 전체 봉 (지표를 정확히 계산하려고)
+        if len(upto) >= len(bars) and upto[-len(bars)]["ts"] == bars[0]["ts"]:
+            zones.overlay(ax, upto, len(bars))
+    except Exception as e:
+        print(f"[박스 오류] {inst}: {e}")
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
