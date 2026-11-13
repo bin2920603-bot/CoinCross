@@ -183,7 +183,9 @@ def draw_panel(ax, cs, bn, hit_name, hit_val):
     for extra in list(fig.axes):
         if extra not in before:
             extra.remove()
-    ax.set_position(pos) 
+    ax.set_aspect("auto")
+    ax.set_box_aspect(None)
+    ax.set_position(pos)
     ax.set_title(f"{bn}" + (f"  ★ {hit_name}" if hit_name else ""), fontsize=14, loc="left",
                  fontweight="bold" if hit_name else "normal")
     if hit_name in COLORS:
