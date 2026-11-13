@@ -204,7 +204,7 @@ def make_card(data, hit_bar, hit_name, hit_val, title):
         star = bar == hit_bar
         draw_panel(ax, cs, bn, hit_name if star else None, hit_val if star else None)
     fig.suptitle(title, fontsize=18, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.subplots_adjust(left=0.06, right=0.985, top=0.93, bottom=0.05, wspace=0.14, hspace=0.2)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=80)
     plt.close(fig)
