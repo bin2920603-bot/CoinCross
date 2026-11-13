@@ -179,6 +179,25 @@ def draw_panel(ax, cs, bn, hit_name, hit_val):
     ax.set_ylim(lo - pad, hi + pad)
     if hit_val:
         ax.axhline(hit_val, color="#FFC107", linestyle="--", linewidth=1.4)
+    if len(cs) >= 30:
+        px = cs[-1]["close"]
+        dd = cs[-SHOW:]
+        lvs = []
+        tl = find_trendline(dd, "down")
+        if tl:
+            lvs.append(("추세선 돌파선", tl[3], "#e65100"))
+        zs = find_zones(dd)
+        up = [z for z in zs if z[0] > px]
+        dn = [z for z in zs if z[1] < px]
+        if up:
+            lvs.append(("위 저항", min(up, key=lambda z: z[0])[0], "#c62828"))
+        if dn:
+            lvs.append(("아래 지지", max(dn, key=lambda z: z[1])[1], "#2e7d32"))
+        for lb, val, col in lvs:
+            if lo - pad <= val <= hi + pad:
+                ax.axhline(val, color=col, linestyle=":", linewidth=1.6)
+                ax.text(0.99, val, f"{lb} {val:.4g}", transform=ax.get_yaxis_transform(),
+                        ha="right", va="bottom", fontsize=9, color=col, fontweight="bold")
     ax.set_xlim(-1, len(v) + 2)
     fig = ax.figure
     pos = ax.get_position()
