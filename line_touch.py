@@ -173,10 +173,17 @@ def draw_panel(ax, cs, bn, hit_name, hit_val):
     if hit_val:
         ax.axhline(hit_val, color="#FFC107", linestyle="--", linewidth=1.4)
     ax.set_xlim(-1, len(v) + 2)
+    fig = ax.figure
+    pos = ax.get_position()
+    before = list(fig.axes)
     try:
         zones.overlay(ax, cs, n)
     except Exception as e:
         print(f"[박스 오류] {e}")
+    for extra in list(fig.axes):
+        if extra not in before:
+            extra.remove()
+    ax.set_position(pos) 
     ax.set_title(f"{bn}" + (f"  ★ {hit_name}" if hit_name else ""), fontsize=14, loc="left",
                  fontweight="bold" if hit_name else "normal")
     if hit_name in COLORS:
