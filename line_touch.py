@@ -140,6 +140,13 @@ def find_touches(cs):
             v = t[3]
             if v > 0 and lo <= v * (1 + TOUCH_TREND) and hi >= v * (1 - TOUCH_TREND) and abs(cl - v) / v <= NOW:
                 hits.append((label, v))
+            slope = (t[3] - t[1]) / (t[2] - t[0])
+            pv = v - slope
+            pc = cs[-2]["close"]
+            if kind == "down" and pc <= pv and cl > v:
+                hits.append(("하락추세선 돌파", v))
+            if kind == "up" and pc >= pv and cl < v:
+                hits.append(("상승추세선 이탈", v))
     if len(d) >= 30:
         for zl, zh in find_zones(d):
             if lo <= zh * (1 + ZONE_PAD) and hi >= zl * (1 - ZONE_PAD):
