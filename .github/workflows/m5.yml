@@ -1,0 +1,64 @@
+name: m5-alert
+
+on:
+  schedule:
+    - cron: "11 * * * *"
+  workflow_dispatch:
+    inputs:
+      find:
+        description: "방 찾기 (처음 한 번만 체크)"
+        type: boolean
+        default: false
+      test:
+        description: "테스트 알림 보내기"
+        type: boolean
+        default: false
+
+concurrency:
+  group: m5
+  cancel-in-progress: false
+
+jobs:
+  m5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 한글 폰트 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 지난 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: m5_state.json
+          key: m5-state-${{ github.run_id }}
+          restore-keys: m5-state-
+
+      - name: 5분 급등락 알림 (1분마다 반복, 약 5시간 40분)
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          M5_CHAT: ${{ secrets.M5_CHAT }}
+        run: |
+          if [ "${{ inputs.find }}" = "true" ]; then
+            python m5.py --find
+          elif [ "${{ inputs.test }}" = "true" ]; then
+            python m5.py --test
+          else
+            python m5.py
+          fi
+
+      - name: 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: m5_state.json
+          key: m5-state-${{ github.run_id }}
