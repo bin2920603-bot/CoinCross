@@ -1,0 +1,64 @@
+name: chg30-alert
+
+on:
+  schedule:
+    - cron: "1-56/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      find:
+        description: "방 찾기 (처음 한 번만 체크)"
+        type: boolean
+        default: false
+      test:
+        description: "테스트 알림 보내기"
+        type: boolean
+        default: false
+
+concurrency:
+  group: chg30
+  cancel-in-progress: false
+
+jobs:
+  chg30:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 한글 폰트 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 지난 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: chg30_state.json
+          key: chg30-state-${{ github.run_id }}
+          restore-keys: chg30-state-
+
+      - name: 전일대비 30 알림
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHG30_CHAT: ${{ secrets.CHG30_CHAT }}
+        run: |
+          if [ "${{ inputs.find }}" = "true" ]; then
+            python chg30.py --find
+          elif [ "${{ inputs.test }}" = "true" ]; then
+            python chg30.py --test
+          else
+            python chg30.py
+          fi
+
+      - name: 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: chg30_state.json
+          key: chg30-state-${{ github.run_id }}
