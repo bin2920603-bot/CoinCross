@@ -1,0 +1,138 @@
+# -*- coding: utf-8 -*-
+"""
+OKX 선물 전일대비(상승률) 상위 30개 코인 차트 알림
+- 5분마다 OKX 24시간 등락률(OKX 앱·거래대금 장부의 '전일대비'와 같은 값) 상위 30개를 확인
+- 30위 안에 새로 들어온 코인의 일봉 차트를 바로 텔레그램으로 보냄 (사진 1장, 글은 한 줄: 순위·코인·등락률)
+- 이미 보낸 코인은 2시간 동안 다시 안 보냄. 단, 순위가 10계단 이상 올라가면 다시 보냄
+- 차트 모양은 top30.py의 make_chart를 가져다 씀 (top30.py는 안 바꿈)
+- 방 번호 찾기: python chg30.py --find   /   테스트 1장: python chg30.py --test
+"""
+import json
+import os
+import sys
+import time
+from datetime import datetime
+
+import cross_alert as ca
+import top30
+
+# ----- 설정값 -----
+TOP_N = 30              # 전일대비 몇 위까지 볼지 (늘리고 싶으면 숫자만 바꾸면 됨)
+COOLDOWN_H = 2          # 한 번 보낸 코인을 몇 시간 동안 다시 안 보낼지
+JUMP = 10               # 순위가 이만큼 이상 올라가면 쿨타임 중이라도 다시 보냄
+CHAT = os.environ.get("CHG30_CHAT", "")
+ca.CHAT_ID = CHAT
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chg30_state.json")
+
+
+def get_ranking():
+    """전일대비(24시간 등락률) 높은 순: [(코인, 등락률%, 현재가)...]"""
+    r = ca.session.get(ca.OKX + "/api/v5/market/tickers", params={"instType": "SWAP"}, timeout=20)
+    r.raise_for_status()
+    rows = []
+    for t in r.json()["data"]:
+        if not t["instId"].endswith("-USDT-SWAP"):
+            continue
+        try:
+            last, open24 = float(t["last"]), float(t["open24h"])
+        except (ValueError, KeyError):
+            continue
+        if open24 > 0 and last > 0:
+            rows.append((t["instId"], (last / open24 - 1) * 100, last))
+    rows.sort(key=lambda x: -x[1])
+    return rows[:TOP_N]
+
+
+def make_chart(inst, cs, rank, chg):
+    """top30의 차트를 그대로 쓰고 제목만 '전일대비 N위'로 바꿈"""
+    orig = top30.plt.subplots
+
+    def sub(*a, **k):
+        fig, axes = orig(*a, **k)
+        osave = fig.savefig
+
+        def save(*aa, **kk):
+            fig.suptitle(f"전일대비 {rank}위  {inst.replace('-USDT-SWAP', '')}  일봉  "
+                         f"{ca.fmt_price(cs[-1]['close'])}  ({chg:+.1f}%)",
+                         fontsize=20, fontweight="bold", y=0.985)
+            return osave(*aa, **kk)
+        fig.savefig = save
+        return fig, axes
+    top30.plt.subplots = sub
+    try:
+        return top30.make_chart(inst, cs, rank)
+    finally:
+        top30.plt.subplots = orig
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
+
+
+def send_one(inst, rank, chg):
+    cs = top30.load(inst)
+    if len(cs) < 30:
+        return False
+    sym = inst.replace("-USDT-SWAP", "")
+    ca.CHAT_ID = CHAT
+    ca.send_telegram(make_chart(inst, cs, rank, chg), f"전일대비 {rank}위 {sym} {chg:+.1f}%")
+    return True
+
+
+def scan(test=False):
+    try:
+        ranking = get_ranking()
+    except Exception as e:
+        print(f"[오류] 순위 조회 실패: {e}")
+        return
+    if test:
+        inst, chg, _ = ranking[0]
+        send_one(inst, 1, chg)
+        print("테스트 1장 보냄")
+        return
+    state = load_state()
+    now = time.time()
+    first_run = not state          # 처음 켠 날은 이미 30위 안에 있던 코인도 한 번씩 보냄
+    sent = 0
+    for rank, (inst, chg, _) in enumerate(ranking, 1):
+        old = state.get(inst)
+        fresh = old is None or now - old["ts"] >= COOLDOWN_H * 3600 or old["rank"] - rank >= JUMP
+        if not fresh:
+            continue
+        try:
+            if send_one(inst, rank, chg):
+                state[inst] = {"ts": now, "rank": rank}
+                sent += 1
+        except Exception as e:
+            print(f"[오류] {inst}: {e}")
+        time.sleep(0.5)
+    # 30위 밖으로 나간 코인은 기록에서 빼서, 다시 들어오면 바로 알림이 가게 함
+    inside = {i for i, _, _ in ranking}
+    for inst in list(state):
+        if inst not in inside:
+            del state[inst]
+    save_state(state)
+    print(f"{datetime.now(ca.KST):%H:%M:%S} 완료: 30개 중 {sent}개 보냄" + (" (첫 실행)" if first_run else ""))
+
+
+def main():
+    ca.setup_korean_font()
+    if "--find" in sys.argv:
+        top30.find_chat()
+        return
+    if not ca.TOKEN or not CHAT:
+        print("[알림] TELEGRAM_TOKEN 또는 CHG30_CHAT이 비어 있어 텔레그램 전송이 안 됩니다.")
+    scan(test="--test" in sys.argv)
+
+
+if __name__ == "__main__":
+    main()
