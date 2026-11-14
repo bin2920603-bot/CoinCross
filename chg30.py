@@ -4,7 +4,7 @@ OKX 선물 전일대비(상승률) 상위 30개 코인 차트 알림
 - 5분마다 OKX 24시간 등락률(OKX 앱·거래대금 장부의 '전일대비'와 같은 값) 상위 30개를 확인
 - 30위 안에 새로 들어온 코인의 일봉 차트를 바로 텔레그램으로 보냄 (사진 1장, 글은 한 줄: 순위·코인·등락률)
 - 이미 보낸 코인은 2시간 동안 다시 안 보냄. 단, 순위가 10계단 이상 올라가면 다시 보냄
-- 차트 모양은 top30.py의 make_chart를 가져다 씀 (top30.py는 안 바꿈)
+- 차트 모양은 top30.py의 make_chart를 가져다 씀 (top30.py는 안 바꿈) + 채널(보라색 평행선) 추가
 - 방 번호 찾기: python chg30.py --find   /   테스트 1장: python chg30.py --test
 """
 import json
@@ -15,10 +15,11 @@ from datetime import datetime
 
 import cross_alert as ca
 import top30
+import zones
 
 # ----- 설정값 -----
 TOP_N = 30              # 전일대비 몇 위까지 볼지 (늘리고 싶으면 숫자만 바꾸면 됨)
-MIN_BARS = 30            # 일봉이 이 개수보다 적은 신규 상장 코인은 건너뜀
+MIN_BARS = 30           # 일봉이 이 개수보다 적은 신규 상장 코인은 건너뜀
 COOLDOWN_H = 2          # 한 번 보낸 코인을 몇 시간 동안 다시 안 보낼지
 JUMP = 10               # 순위가 이만큼 이상 올라가면 쿨타임 중이라도 다시 보냄
 CHAT = os.environ.get("CHG30_CHAT", "")
@@ -44,6 +45,35 @@ def get_ranking():
     return rows[:TOP_N]
 
 
+def add_channel(ax, cs):
+    """채널: 저점끼리 이은 추세선(초록)과 평행한 선을 가장 높은 고점에, 고점끼리 이은 추세선(빨강)과 평행한 선을 가장 낮은 저점에 그어 채널 모양을 만듦"""
+    n = min(zones.SHOW_BARS, len(cs))
+    view = cs[-n:]
+    price = view[-1]["close"]
+    hi, lo = zones.pivots(view)
+    y0, y1 = ax.get_ylim()
+    x0, x1 = ax.get_xlim()
+    for pts, upper in ((lo, True), (hi, False)):
+        t = zones.trend_line(pts, n, price, y0, y1)
+        if not t:
+            continue
+        xa, ya, end = t
+        slope = (end - ya) / (n + 2 - xa)
+        if upper:     # 저점선 위쪽에 평행선: 시작점 이후 가장 높은 고점까지
+            off = max(view[i]["high"] - (ya + slope * (i - xa)) for i in range(int(xa), n))
+        else:         # 고점선 아래쪽에 평행선: 시작점 이후 가장 낮은 저점까지
+            off = min(view[i]["low"] - (ya + slope * (i - xa)) for i in range(int(xa), n))
+        if abs(off) < price * 0.005:
+            continue
+        xs = [xa, n + 2]
+        base = [ya, end]
+        par = [ya + off, end + off]
+        ax.plot(xs, par, color="#8e24aa", linestyle="--", linewidth=1.6, zorder=2)
+        ax.fill_between(xs, base, par, color="#8e24aa", alpha=0.07, zorder=0)
+    ax.set_ylim(y0, y1)
+    ax.set_xlim(x0, x1)
+
+
 def make_chart(inst, cs, rank, chg):
     """top30의 차트를 그대로 쓰고 제목만 '전일대비 N위'로 바꿈"""
     orig = top30.plt.subplots
@@ -53,6 +83,10 @@ def make_chart(inst, cs, rank, chg):
         osave = fig.savefig
 
         def save(*aa, **kk):
+            try:
+                add_channel(axes[0], cs)
+            except Exception as e:
+                print(f"[채널 오류] {inst}: {e}")
             fig.suptitle(f"전일대비 {rank}위  {inst.replace('-USDT-SWAP', '')}  일봉  "
                          f"{ca.fmt_price(cs[-1]['close'])}  ({chg:+.1f}%)",
                          fontsize=20, fontweight="bold", y=0.985)
