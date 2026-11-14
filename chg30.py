@@ -4,7 +4,7 @@ OKX 선물 전일대비(상승률) 상위 30개 코인 차트 알림
 - 5분마다 OKX 24시간 등락률(OKX 앱·거래대금 장부의 '전일대비'와 같은 값) 상위 30개를 확인
 - 30위 안에 새로 들어온 코인의 일봉 차트를 바로 텔레그램으로 보냄 (사진 1장, 글은 한 줄: 순위·코인·등락률)
 - 이미 보낸 코인은 2시간 동안 다시 안 보냄. 단, 순위가 10계단 이상 올라가면 다시 보냄
-- 차트 모양은 top30.py의 make_chart를 가져다 씀 (top30.py는 안 바꿈) + 채널(보라색 평행선) 추가
+- 차트 모양은 top30.py의 make_chart를 가져다 씀 (top30.py는 안 바꿈)
 - 방 번호 찾기: python chg30.py --find   /   테스트 1장: python chg30.py --test
 """
 import json
@@ -64,6 +64,12 @@ def add_channel(ax, cs):
         else:         # 고점선 아래쪽에 평행선: 시작점 이후 가장 낮은 저점까지
             off = min(view[i]["low"] - (ya + slope * (i - xa)) for i in range(int(xa), n))
         if abs(off) < price * 0.005:
+            continue
+        # 평행선이 실제로 2곳 이상 닿을 때만 채널로 인정 (한 점에만 닿으면 그리지 않음)
+        opp = hi if upper else lo
+        key = "high" if upper else "low"
+        touch = sum(1 for i, _ in opp if i >= xa and abs(view[i][key] - (ya + off + slope * (i - xa))) <= price * 0.01)
+        if touch < 2:
             continue
         xs = [xa, n + 2]
         base = [ya, end]
