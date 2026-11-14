@@ -18,6 +18,7 @@ import top30
 
 # ----- 설정값 -----
 TOP_N = 30              # 전일대비 몇 위까지 볼지 (늘리고 싶으면 숫자만 바꾸면 됨)
+MIN_BARS = 5            # 일봉이 이 개수보다 적은 신규 상장 코인은 건너뜀
 COOLDOWN_H = 2          # 한 번 보낸 코인을 몇 시간 동안 다시 안 보낼지
 JUMP = 10               # 순위가 이만큼 이상 올라가면 쿨타임 중이라도 다시 보냄
 CHAT = os.environ.get("CHG30_CHAT", "")
@@ -80,7 +81,8 @@ def save_state(state):
 
 def send_one(inst, rank, chg):
     cs = top30.load(inst)
-    if len(cs) < 30:
+    if len(cs) < MIN_BARS:          # 상장한 지 너무 얼마 안 된 코인은 차트를 못 그림
+        print(f"[건너뜀] {inst}: 일봉 {len(cs)}개뿐")
         return False
     sym = inst.replace("-USDT-SWAP", "")
     ca.CHAT_ID = CHAT
@@ -95,9 +97,11 @@ def scan(test=False):
         print(f"[오류] 순위 조회 실패: {e}")
         return
     if test:
-        inst, chg, _ = ranking[0]
-        send_one(inst, 1, chg)
-        print("테스트 1장 보냄")
+        for rank, (inst, chg, _) in enumerate(ranking, 1):
+            if send_one(inst, rank, chg):
+                print(f"테스트 1장 보냄: {inst}")
+                return
+        print("[테스트 실패] 보낼 수 있는 코인이 없음")
         return
     state = load_state()
     now = time.time()
