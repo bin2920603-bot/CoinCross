@@ -2,7 +2,7 @@
 """
 OKX 선물 5분 급등·급락 차트 알림 (OKX 앱 Futures > Gainers/Losers 의 "5 minutes" 순위와 같은 방식)
 - 1분마다 전체 코인 가격을 기록해 두고, 지금 가격을 5분 전 가격과 비교해 5분 등락률을 계산
-- 5분 상승률 상위 10개 중 +1% 이상(📈), 5분 하락률 상위 10개 중 -1% 이하(📉)인 코인의 일봉 차트(채널 포함)를 바로 텔레그램으로 보냄
+- 5분 상승률 상위 10개 중 +1% 이상(📈), 5분 하락률 상위 10개 중 -1% 이하(📉)인 코인의 차트 4장(5분봉·15분봉·1시간봉·일봉, 채널 포함)을 앨범으로 바로 텔레그램으로 보냄
 - 같은 코인은 30분 안에 다시 안 보냄. 24시간 거래대금이 너무 작은 코인(잔돈 코인)은 건너뜀
 - 한 번 켜지면 약 5시간 40분 동안 1분마다 직접 반복 (GitHub 자동 실행이 자주 빠져서)
 - 방 번호 찾기: python m5.py --find   /   테스트 1장: python m5.py --test
@@ -25,6 +25,8 @@ WINDOW_SEC = 300         # 5분
 COOLDOWN_MIN = 30        # 한 번 보낸 코인을 몇 분 동안 다시 안 보낼지
 MIN_TURNOVER = 1_000_000 # 24시간 거래대금(USDT)이 이보다 작은 코인은 건너뜀
 MIN_BARS = 30            # 일봉이 이 개수보다 적은 신규 상장 코인은 건너뜀
+TIMEFRAMES = [("5분봉", "5m"), ("15분봉", "15m"), ("1시간봉", "1H"), ("일봉", "1D")]   # 한 번에 보낼 차트 4장 (앨범 순서)
+TF_BARS = 330            # 5분·15분·1시간봉은 이평선(EMA200) 계산용으로 이만큼 불러옴
 TICK_SEC = 60            # 몇 초마다 확인할지
 RUN_SEC = 20400          # 한 번 켜지면 몇 초 동안 돌지 (약 5시간 40분)
 CHAT = os.environ.get("M5_CHAT", "")
@@ -65,7 +67,20 @@ def five_min_change(hist, now):
     return (hist[-1][1] / base - 1) * 100
 
 
-def make_chart(inst, cs, title):
+def load_tf(inst, bar):
+    """봉 종류별 캔들 불러오기 (일봉은 top30 방식 그대로)"""
+    if bar == "1D":
+        return top30.load(inst)
+    hist = top30.get_history(inst, TF_BARS, bar)
+    r = ca.session.get(ca.OKX + "/api/v5/market/candles",
+                       params={"instId": inst, "bar": bar, "limit": 100}, timeout=15)
+    r.raise_for_status()
+    recent = [{"ts": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]),
+               "close": float(c[4]), "vol": float(c[5]), "quote_vol": float(c[7])} for c in reversed(r.json()["data"])]
+    return top30.merge_recent(hist, recent)
+
+
+def make_chart(inst, cs, title, tf_name, bar):
     orig = top30.plt.subplots
 
     def sub(*a, **k):
@@ -77,7 +92,16 @@ def make_chart(inst, cs, title):
                 chg30.add_channel(axes[0], cs)
             except Exception as e:
                 print(f"[채널 오류] {inst}: {e}")
-            fig.suptitle(f"{title}  {inst.replace('-USDT-SWAP', '')}  일봉  {ca.fmt_price(cs[-1]['close'])}",
+            if bar != "1D":      # 가로축 글자를 날짜 대신 시각으로
+                try:
+                    n = min(top30.SHOW_BARS, len(cs))
+                    view = cs[-n:]
+                    step = max(1, n // 8)
+                    axes[3].set_xticklabels([datetime.fromtimestamp(c["ts"] / 1000, ca.KST).strftime("%d일 %H:%M")
+                                             for c in view[::step]], fontsize=9)
+                except Exception as e:
+                    print(f"[축 오류] {inst}: {e}")
+            fig.suptitle(f"{title}  {inst.replace('-USDT-SWAP', '')}  {tf_name}  {ca.fmt_price(cs[-1]['close'])}",
                          fontsize=20, fontweight="bold", y=0.985)
             return osave(*aa, **kk)
         fig.savefig = save
@@ -89,16 +113,48 @@ def make_chart(inst, cs, title):
         top30.plt.subplots = orig
 
 
+def send_album(photos, caption):
+    """사진 여러 장을 한 번에(앨범) 보냄. 첫 장에만 글이 붙음"""
+    if not ca.TOKEN or not CHAT:
+        print("  (TOKEN/CHAT_ID가 비어 있어 텔레그램 전송은 건너뜀)")
+        return
+    if len(photos) == 1:
+        ca.CHAT_ID = CHAT
+        ca.send_telegram(photos[0], caption)
+        return
+    media, files = [], {}
+    for i, p in enumerate(photos):
+        item = {"type": "photo", "media": f"attach://p{i}"}
+        if i == 0:
+            item["caption"] = caption
+        media.append(item)
+        files[f"p{i}"] = (f"chart{i}.png", p, "image/png")
+    r = ca.session.post(f"https://api.telegram.org/bot{ca.TOKEN}/sendMediaGroup",
+                        data={"chat_id": CHAT, "media": json.dumps(media)}, files=files, timeout=60)
+    if not r.ok:
+        print(f"  [텔레그램 오류] {r.status_code} {r.text}")
+
+
 def send_one(inst, up, rank, pct):
-    cs = top30.load(inst)
-    if len(cs) < MIN_BARS:
-        print(f"[건너뜀] {inst}: 일봉 {len(cs)}개뿐")
+    daily = top30.load(inst)
+    if len(daily) < MIN_BARS:
+        print(f"[건너뜀] {inst}: 일봉 {len(daily)}개뿐")
         return False
     sym = inst.replace("-USDT-SWAP", "")
     icon, word = ("📈", "상승") if up else ("📉", "하락")
-    ca.CHAT_ID = CHAT
-    ca.send_telegram(make_chart(inst, cs, f"5분 {pct:+.1f}% {word} {rank}위"),
-                     f"{icon} 5분 {pct:+.1f}% {sym} · {word} {rank}위")
+    title = f"5분 {pct:+.1f}% {word} {rank}위"
+    photos = []
+    for tf_name, bar in TIMEFRAMES:
+        try:
+            cs = daily if bar == "1D" else load_tf(inst, bar)
+            if len(cs) < MIN_BARS:
+                continue
+            photos.append(make_chart(inst, cs, title, tf_name, bar))
+        except Exception as e:
+            print(f"[차트 오류] {inst} {tf_name}: {e}")
+    if not photos:
+        return False
+    send_album(photos, f"{icon} 5분 {pct:+.1f}% {sym} · {word} {rank}위")
     return True
 
 
